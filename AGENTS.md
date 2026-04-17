@@ -1,140 +1,138 @@
-# Saleor
+# CLAUDE.md
 
-## Graphql
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-###  API versioning
+## What This Project Is
 
-- Check last git tag to find what version we are branched from (e.g. 3.22 tag). Based on that, add description to new fields with ADDED_IN_{VERSION} clause
+Headless e-commerce platform for the Colombian market. **Saleor 3.22** (Python/Django/GraphQL) as the commerce backend, **Nuxt 4** as the storefront, Colombian payment gateways (Wompi, PayU, MercadoPago) as independent Payment Apps, and everything deployed on **Railway**.
 
+**Always check `docs/superpowers/plans/STATUS.md` at the start of every session** to see the current phase, what's done, and what's next.
 
-### GraphQL permissions
-- Use PermissionsField to describe field restrictions
+---
 
-# Testing
+## Repositories
 
-## Running tests
+This is the `licona-saleor` repo (Saleor fork). The other two repos are yet to be created:
 
-- Run tests using `pytest`
-- Attach `--reuse-db` argument to speed up tests by reusing the test database
-- Select tests to run by passing test file path as an argument
-- Enter virtual environment before executing tests
+| Repo | Purpose |
+|---|---|
+| **`licona-saleor`** ← you are here | Fork of `saleor/saleor` — backend API, Celery worker, beat |
+| `licona-storefront` | Nuxt 4 storefront |
+| `licona-saleor-apps` | Monorepo of Saleor Apps (payment gateways, shipping, invoicing) |
 
-## Writing tests
+---
 
-- Use given/when/then structure for clarity
-- Use `pytest` fixtures for setup and teardown
-- Declare test suites flat in file. Do not wrapp in classes
-- Prefer using fixtures over mocking. Fixtures are usually within directory "tests/fixtures" and are functions decorated with`@pytest.fixture`
-- When you create an object for testing and fixture for it doesn't exist, create new one. You can use factory to pass arguments to the fixture.
-- When writing assertions, prefer assertion on actual returned value instead of checking if it's not none. For example: `assert email is "a@b.com` instead if `assert email is not None`
-- When asserting GraphQL errors, assert error message too
-- When asserting to Enum, import enum in a test file and use `assert error.code == MyEnum.SOME_ERROR.name` instead plain string comparison
-- Avoid assertion to plain values, if you already have references to existing value. For example, when you create entity in database and assert if entity is returned in response, compare response fields with entity fields, instead plain values.
-- When setting up test data, extract values into variables and reuse them in assertions. Do not repeat literal values between setup and assertion — use the variable instead.
-- When comparing JSON payloads in tests, use `json.loads()` to compare dicts instead of comparing serialized strings with `json.dumps()`. String comparison breaks when key order changes.
+## Architecture
 
-
-# Webhooks and Events
-
-## Dispatching webhook events
-
-When triggering plugin manager methods to dispatch webhook events, always use `call_event` from `saleor.core.utils.events` instead of calling the manager method directly.
-
-**Bad:**
-```python
-manager.product_variant_discounted_price_updated(price_info, webhooks=webhooks)
+```
+Nuxt 4 Storefront  →  Saleor Core API (GraphQL)  ←  Saleor Apps (microservices)
+                              ↓                              ↓
+                       Postgres 16              Payment gateways (CO):
+                       Redis 7                  Wompi · PayU · MercadoPago
+                       Cloudflare R2            Envíos · Facturación DIAN
 ```
 
-**Good:**
-```python
-from saleor.core.utils.events import call_event
+**Key architectural decisions:**
+- Apps over plugins (Saleor plugins are deprecated — all extensions are independent microservices)
+- Dashboard is untouched — extended via App iframe extensions only
+- Transactions API (not legacy Payments API) for all payment integrations
+- COP currency with `decimal_places=0` (Colombian peso has no practical decimal in billing)
+- JWT tokens in httpOnly cookies (never localStorage)
+- APL for Apps: `UpstashRedisAPL` in production (Railway filesystem doesn't persist)
 
-call_event(manager.product_variant_discounted_price_updated, price_info, webhooks=webhooks)
-```
+---
 
-# Concurrency and Thread Safety
+## Project Plans
 
-Saleor runs across many Python services that execute concurrently. Follow these patterns to ensure thread-safe code.
+All implementation plans are in `docs/superpowers/plans/`:
 
-## Atomic Increment Pattern
+| File | Coverage |
+|---|---|
+| `STATUS.md` | **Master tracking file** — current phase, repos, services, session log |
+| `2026-04-16-fase0-infraestructura.md` | Fork setup, GitHub Actions, Railway services, domains |
+| `2026-04-16-fase1-catalogo-storefront.md` | Nuxt 4 scaffold, GraphQL client, PLP/PDP, ISR, brand tokens |
+| `2026-04-16-fase2-checkout-envios.md` | Cart, checkout flow, `app-envios-co` (Servientrega/Coordinadora/TCC) |
+| `2026-04-16-fase3-pasarelas-co.md` | Wompi, PayU, MercadoPago Payment Apps (Transactions API) |
+| `2026-04-16-fase4-cuenta-facturacion.md` | Customer auth, order history, `app-facturacion-co` (Siigo/DIAN) |
+| `2026-04-16-fase5-golive.md` | Lighthouse ≥90, k6 load tests, WCAG 2.2 AA, go-live checklist |
 
-Never use `instance.count += 1; instance.save()` - this is NOT atomic and causes lost updates.
+To execute a plan use the `superpowers:executing-plans` or `superpowers:subagent-driven-development` skill.
 
-**Bad:**
-```python
-existing.count += 1
-existing.save(update_fields=["count"])
-```
+---
 
-**Good - use F() expressions:**
-```python
-from django.db.models import F
+## Tech Stack per Repo
 
-Model.objects.filter(pk=existing.pk).update(count=F("count") + 1)
-```
+**`licona-saleor` (Saleor fork)**
+- Python 3.12, Django, Celery, Gunicorn + Uvicorn workers
+- `python manage.py migrate` — run migrations
+- `celery -A saleor worker` — start worker
+- `celery -A saleor beat` — start scheduler
 
-## Avoid Check-Then-Act Race Conditions
+**`licona-storefront` (Nuxt 4)**
+- Node 22, Vue 3.5, TypeScript strict, `@urql/vue`, Tailwind CSS v4
+- `npm run dev` — development server
+- `npm run codegen` — regenerate GraphQL types from Saleor schema
+- `npm run build` — production build
+- `npx vitest run` — unit tests
+- `npx playwright test` — E2E tests
 
-Never check if a record exists and then create/update it in separate operations.
+**`licona-saleor-apps` (pnpm monorepo)**
+- `pnpm install` — install all workspace deps
+- Each app: `pnpm --filter @licona/app-wompi dev`
+- Each app test: `pnpm --filter @licona/app-wompi test`
 
-**Bad:**
-```python
-existing = Model.objects.filter(app=app, key=key).first()
-if not existing:
-    Model.objects.create(app=app, key=key, ...)  # Race condition: duplicate may be created
-else:
-    existing.update(...)
-```
+---
 
-**Good - use update_or_create with unique constraint:**
-```python
-obj, created = Model.objects.update_or_create(
-    app=app, key=key,  # Lookup fields
-    defaults={"message": message, "updated_at": now}  # Fields to update
-)
-```
+## Saleor Upstream Sync Rule
 
-**Note:** `update_or_create` requires a unique constraint on the lookup fields to be truly safe.
+**CRITICAL:** Saleor only guarantees zero-downtime migrations between consecutive minor versions. To upgrade from 3.19 → 3.21 you must go through 3.20 first. Never skip minor versions.
 
+The GitHub Actions workflow `sync-upstream.yml` opens a weekly PR when a new stable tag is detected. Review it, run migration tests, then merge.
 
-## Row-Level Locking with select_for_update
+All local changes to the fork must be documented in `UPGRADE_NOTES.md` in the fork root.
 
-For complex operations requiring multiple reads/writes on the same row, use `select_for_update`:
+---
 
-```python
-from saleor.core.tracing import traced_atomic_transaction
+## Payment App Pattern
 
-with traced_atomic_transaction():
-    obj = Model.objects.select_for_update().get(pk=pk)
-    # Perform operations - row is locked until transaction ends
-    obj.save()
-```
+Every payment gateway App implements these 6 synchronous Saleor webhooks:
 
-**Pattern: Create lock_objects.py modules** (like `saleor/payment/lock_objects.py`):
+1. `PAYMENT_GATEWAY_INITIALIZE_SESSION` — return public key + enabled methods
+2. `TRANSACTION_INITIALIZE_SESSION` — create transaction in gateway, return redirect URL
+3. `TRANSACTION_PROCESS_SESSION` — handle additional steps (3DS, etc.)
+4. `TRANSACTION_CHARGE_REQUESTED` — capture an authorization
+5. `TRANSACTION_REFUND_REQUESTED` — issue a refund
+6. `TRANSACTION_CANCELATION_REQUESTED` — void an authorization
 
-```python
-def my_model_qs_select_for_update() -> QuerySet[MyModel]:
-    return MyModel.objects.order_by("pk").select_for_update(of=["self"])
-```
+Plus one incoming webhook from the gateway (e.g. `wompi-incoming`) that calls `transactionEventReport` on Saleor.
 
-## Database Transactions
+Amount conversion: Saleor sends COP amounts (e.g. `120000`). Wompi expects centavos (`12000000`). Multiply by 100 in the App. PayU and MercadoPago have their own conventions — check each provider's docs.
 
-Wrap related operations in transactions using `traced_atomic_transaction`:
+---
 
-```python
-from saleor.core.tracing import traced_atomic_transaction
+## Storefront Design Tokens
 
-with traced_atomic_transaction():
-    # All operations here are atomic
-    obj1.save()
-    obj2.save()
-```
+The storefront uses a deliberate editorial aesthetic (not generic SaaS):
+- **Display font:** Fraunces (serif) — headlines only
+- **Body font:** Satoshi (geometric sans) — UI and body text
+- **Background:** `#F4EFE6` (warm cream)
+- **Ink:** `#1A1613` (deep near-black)
+- **Accent:** `#C44536` (terracotta)
+- Tokens defined in `app/assets/styles/brand.css`
 
-## Summary of Patterns Used in Saleor
+---
 
-| Pattern | Module Example | When to Use |
-|---------|---------------|-------------|
-| `F()` atomic increment | `saleor/discount/utils/voucher.py:85` | Counter updates |
-| `select_for_update` | `saleor/payment/lock_objects.py` | Complex read-modify-write |
-| `update_or_create` | `saleor/graphql/attribute/utils/type_handlers.py` | Upsert operations |
-| `traced_atomic_transaction` | `saleor/core/tracing.py` | Multi-operation atomicity |
+## Railway Services
+
+| Service | Image/Source | Start command |
+|---|---|---|
+| `saleor-api` | `licona-saleor` repo | `gunicorn --bind 0.0.0.0:$PORT ... saleor.asgi:application` |
+| `saleor-worker` | same image | `celery -A saleor worker -E --concurrency=4` |
+| `saleor-beat` | same image | `celery -A saleor beat` |
+| `saleor-dashboard` | `ghcr.io/saleor/saleor-dashboard:3.22.x` | (official image) |
+| `storefront` | `licona-storefront` repo | `node .output/server/index.mjs` |
+| `app-wompi` | `licona-saleor-apps` / `apps/wompi` | `node server.js` |
+| `app-envios` | `licona-saleor-apps` / `apps/envios` | `node dist/index.js` |
+| `app-facturacion` | `licona-saleor-apps` / `apps/facturacion` | `node dist/index.js` |
+
+Internal services communicate via Railway's private IPv6 network (no public ports needed for Postgres/Redis).
