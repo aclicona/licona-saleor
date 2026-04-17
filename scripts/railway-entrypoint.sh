@@ -4,8 +4,10 @@ set -e
 # Esperar a que la DB esté lista
 sh /app/scripts/wait-for-db.sh
 
-# Ejecutar migraciones (idempotente)
-python manage.py migrate --noinput
+# Solo el servicio API corre migraciones (worker y beat usan SKIP_MIGRATIONS=true)
+if [ "${SKIP_MIGRATIONS}" != "true" ]; then
+  python manage.py migrate --noinput
+fi
 
 # Crear superusuario si no existe (solo en primer deploy)
 if [ "$CREATE_SUPERUSER" = "true" ]; then

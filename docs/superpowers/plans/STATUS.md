@@ -8,10 +8,10 @@
 
 | Campo | Valor |
 |---|---|
-| **Fase actual** | Fase 0 — Infraestructura (NO iniciada) |
-| **Fecha de inicio** | — |
-| **Última actualización** | 2026-04-16 |
-| **Próxima acción** | Crear fork de Saleor en GitHub y configurar proyecto Railway |
+| **Fase actual** | Fase 0 — Infraestructura (En progreso) |
+| **Fecha de inicio** | 2026-04-16 |
+| **Última actualización** | 2026-04-17 |
+| **Próxima acción** | Desplegar saleor-worker, saleor-beat y saleor-dashboard en Railway |
 
 ---
 
@@ -19,7 +19,7 @@
 
 | # | Fase | Estado | Semanas | Plan |
 |---|---|---|---|---|
-| 0 | Infraestructura (Fork Saleor + Railway) | 🔲 Pendiente | 1 | [Fase 0](2026-04-16-fase0-infraestructura.md) |
+| 0 | Infraestructura (Fork Saleor + Railway) | 🔄 En progreso | 1 | [Fase 0](2026-04-16-fase0-infraestructura.md) |
 | 1 | Catálogo y Storefront base | 🔲 Pendiente | 2-4 | [Fase 1](2026-04-16-fase1-catalogo-storefront.md) |
 | 2 | Checkout sin pago | 🔲 Pendiente | 5-6 | [Fase 2](2026-04-16-fase2-checkout-envios.md) |
 | 3 | Pasarelas de pago Colombia | 🔲 Pendiente | 7-9 | [Fase 3](2026-04-16-fase3-pasarelas-co.md) |
@@ -34,7 +34,7 @@
 
 | Repo | URL | Estado |
 |---|---|---|
-| `licona-saleor` | — (por crear) | 🔲 Pendiente |
+| `licona-saleor` | https://github.com/aclicona/licona-saleor | ✅ Activo (branch `stable/3.22`) |
 | `licona-storefront` | — (por crear) | 🔲 Pendiente |
 | `licona-saleor-apps` | — (por crear) | 🔲 Pendiente |
 
@@ -44,9 +44,9 @@
 
 | Servicio | Estado | URL |
 |---|---|---|
-| `postgres` | 🔲 Por crear | — |
-| `redis` | 🔲 Por crear | — |
-| `saleor-api` | 🔲 Por crear | — |
+| `postgres` | ✅ Corriendo | Railway interno |
+| `redis` | ✅ Corriendo | Railway interno |
+| `saleor-api` | ✅ Corriendo | proyecto `licona-store` en Railway |
 | `saleor-worker` | 🔲 Por crear | — |
 | `saleor-beat` | 🔲 Por crear | — |
 | `saleor-dashboard` | 🔲 Por crear | — |
@@ -74,6 +74,7 @@
 | Fecha | Sesión | Qué se hizo | Qué quedó pendiente |
 |---|---|---|---|
 | 2026-04-16 | Planificación | Spec recibida. Planes creados. CLAUDE.md actualizado. | Iniciar Fase 0 |
+| 2026-04-17 | Fase 0 — Deploy | Fork activo en GitHub. Postgres + Redis + saleor-api corriendo en Railway. Dockerfile optimizado (multi-stage, uv, sin cache mounts). railway.json con DOCKERFILE builder, nixpacksPlan vacío para evitar inyección de Node.js cache mounts. Port fix con `sh -c`. RSA_PRIVATE_KEY como PEM crudo. | Worker, beat, dashboard |
 
 ---
 
