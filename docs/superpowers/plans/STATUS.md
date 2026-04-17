@@ -20,7 +20,7 @@
 | # | Fase | Estado | Semanas | Plan |
 |---|---|---|---|---|
 | 0 | Infraestructura (Fork Saleor + Railway) | ✅ Completada | 1 | [Fase 0](2026-04-16-fase0-infraestructura.md) |
-| 1 | Catálogo y Storefront base | 🔄 En progreso | 2-4 | [Fase 1](2026-04-16-fase1-catalogo-storefront.md) |
+| 1 | Catálogo y Storefront base | 🔄 En progreso — código listo, falta Railway + fuentes | 2-4 | [Fase 1](2026-04-16-fase1-catalogo-storefront.md) |
 | 2 | Checkout sin pago | 🔲 Pendiente | 5-6 | [Fase 2](2026-04-16-fase2-checkout-envios.md) |
 | 3 | Pasarelas de pago Colombia | 🔲 Pendiente | 7-9 | [Fase 3](2026-04-16-fase3-pasarelas-co.md) |
 | 4 | Cuenta cliente y facturación | 🔲 Pendiente | 10-11 | [Fase 4](2026-04-16-fase4-cuenta-facturacion.md) |
@@ -35,7 +35,7 @@
 | Repo | URL | Estado |
 |---|---|---|
 | `licona-saleor` | https://github.com/aclicona/licona-saleor | ✅ Activo (branch `stable/3.22`) |
-| `licona-storefront` | — (por crear) | 🔲 Pendiente |
+| `licona-storefront` | https://github.com/aclicona/licona-storefront | 🔄 En progreso (Fase 1) |
 | `licona-saleor-apps` | — (por crear) | 🔲 Pendiente |
 
 ---
@@ -50,7 +50,7 @@
 | `saleor-worker` | ✅ Corriendo | Railway interno (Celery) |
 | `saleor-beat` | ✅ Corriendo | Railway interno (Celery beat) |
 | `saleor-dashboard` | ✅ Corriendo | https://saleor-dashboard-production-4a02.up.railway.app |
-| `storefront` | 🔲 Por crear | — |
+| `storefront` | 🔲 Por crear en Railway | — |
 | `app-wompi` | 🔲 Por crear | — |
 | `app-payu` | 🔲 Por crear | — |
 | `app-mercadopago` | 🔲 Por crear | — |
@@ -76,6 +76,7 @@
 | 2026-04-16 | Planificación | Spec recibida. Planes creados. CLAUDE.md actualizado. | Iniciar Fase 0 |
 | 2026-04-17 | Fase 0 — Deploy | Fork activo en GitHub. Postgres + Redis + saleor-api corriendo en Railway. Dockerfile optimizado (multi-stage, uv, sin cache mounts). railway.json con DOCKERFILE builder, nixpacksPlan vacío para evitar inyección de Node.js cache mounts. Port fix con `sh -c`. RSA_PRIVATE_KEY como PEM crudo. | Worker, beat, dashboard |
 | 2026-04-17 | Fase 0 — Completada | Todos los servicios corriendo. S3+CloudFront operativo (imágenes en d38o6f3ivpuaig.cloudfront.net). Fixes aplicados: ENTRYPOINT→CMD shell form, healthcheck por servicio, discount.0052 para PG18, dashboard=3.22, PUBLIC_URL, AWS_MEDIA_BUCKET_NAME. | GitHub Actions (sync + build) |
+| 2026-04-17 | Fase 1 — Código base | Repo `licona-storefront` creado en GitHub. Nuxt 4, Tailwind v4 (CSS-first/@tailwindcss/vite), URQL+retryExchange, Codegen contra API real, componentes (ProductCard, ProductGrid, ProductGallery, ProductVariants), páginas (Home, PLP, PDP), endpoint revalidación ISR, Dockerfile. 3/3 tests Vitest. | Desplegar en Railway, agregar fuentes woff2 (Fraunces + Satoshi) |
 
 ---
 
