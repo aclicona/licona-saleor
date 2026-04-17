@@ -1,0 +1,65 @@
+name: Sync with Saleor upstream
+
+on:
+  schedule:
+    # Cada lunes a las 9:00 UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch upstream tags
+        run: |
+          git remote add upstream https://github.com/saleor/saleor.git || true
+          git fetch upstream --tags
+
+      - name: Get latest stable tag in current minor series
+        id: upstream_tag
+        run: |
+          # Only look for patches in the same minor (3.22.x) to enforce minor-by-minor upgrades
+          CURRENT_MINOR=$(grep '^version' pyproject.toml | sed 's/version = "\([0-9]*\.[0-9]*\).*/\1/')
+          LATEST=$(git tag -l "${CURRENT_MINOR}.*" --sort=-v:refname | grep -E "^${CURRENT_MINOR//./\\.}\.[0-9]+$" | head -1)
+          echo "tag=$LATEST" >> $GITHUB_OUTPUT
+          echo "Current minor: $CURRENT_MINOR | Latest patch: $LATEST"
+
+      - name: Check if PR already exists
+        id: check_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          EXISTING=$(gh pr list --head "sync/upstream-${{ steps.upstream_tag.outputs.tag }}" --json number -q '.[0].number')
+          echo "pr_number=$EXISTING" >> $GITHUB_OUTPUT
+
+      - name: Create sync branch and PR
+        if: steps.check_pr.outputs.pr_number == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=${{ steps.upstream_tag.outputs.tag }}
+          BRANCH="sync/upstream-$TAG"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH"
+          git merge "refs/tags/$TAG" --no-edit || true
+
+          git push origin "$BRANCH" --force
+
+          gh pr create \
+            --title "chore: sync upstream Saleor $TAG" \
+            --body "Automated sync with saleor/saleor@$TAG. Review conflicts and run migration tests before merging. See UPGRADE_NOTES.md for local changes to watch for conflicts." \
+            --base stable/3.22 \
+            --head "$BRANCH" \
+            --label "upstream-sync"
