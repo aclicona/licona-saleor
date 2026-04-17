@@ -29,10 +29,23 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 - `.github/workflows/build-image.yml` — Build y push de imagen Docker a GHCR en cada push a `stable/3.22`.
 - `.github/workflows/security-scan.yml` — Escaneo Trivy semanal de vulnerabilidades en la imagen.
 
+### 2026-04-17 — Fix migración discount.0052 para PostgreSQL 15+ (base: 3.22.48)
+
+**Archivos modificados:**
+
+- `saleor/discount/migrations/0052_drop_sales_constraints.py`
+  - Envuelto cada `execute DROP CONSTRAINT` en `BEGIN/EXCEPTION WHEN others THEN null END`.
+  - Motivo: PostgreSQL 15+ lanza `InvalidTableDefinition` al intentar dropear el constraint
+    `*_id_not_null` en tablas donde `id` es parte de la PK (ej. `discount_sale_collections`).
+    El `IF EXISTS` no es suficiente para este tipo de error; hay que capturar la excepción.
+  - **Conflicto potencial al actualizar upstream:** Si Saleor corrige esta migración en el upstream,
+    puede haber un conflicto en este archivo. Revisar y descartar el parche local si el fix upstream
+    lo resuelve correctamente.
+
 **Sin cambios en:**
 
 - Lógica de negocio de Saleor
-- Modelos, migraciones ni settings de Django
+- Modelos ni settings de Django
 - Código Python del core
 
 ---
