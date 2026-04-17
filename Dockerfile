@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.4
 ### Build and install packages
 FROM python:3.12 AS build-python
 
@@ -11,8 +12,7 @@ RUN apt-get -y update \
 WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 UV_SYSTEM_PYTHON=1 UV_PROJECT_ENVIRONMENT=/usr/local
-RUN --mount=type=cache,id=licona-saleor-uv,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
+RUN --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync --locked --no-install-project --no-editable
 
