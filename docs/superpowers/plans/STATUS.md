@@ -8,10 +8,10 @@
 
 | Campo | Valor |
 |---|---|
-| **Fase actual** | Fase 0 — Infraestructura (En progreso) |
+| **Fase actual** | Fase 1 — Catálogo y Storefront base |
 | **Fecha de inicio** | 2026-04-16 |
 | **Última actualización** | 2026-04-17 |
-| **Próxima acción** | Desplegar saleor-worker, saleor-beat y saleor-dashboard en Railway |
+| **Próxima acción** | Crear repo `licona-storefront` (Nuxt 4) |
 
 ---
 
@@ -19,8 +19,8 @@
 
 | # | Fase | Estado | Semanas | Plan |
 |---|---|---|---|---|
-| 0 | Infraestructura (Fork Saleor + Railway) | 🔄 En progreso | 1 | [Fase 0](2026-04-16-fase0-infraestructura.md) |
-| 1 | Catálogo y Storefront base | 🔲 Pendiente | 2-4 | [Fase 1](2026-04-16-fase1-catalogo-storefront.md) |
+| 0 | Infraestructura (Fork Saleor + Railway) | ✅ Completada | 1 | [Fase 0](2026-04-16-fase0-infraestructura.md) |
+| 1 | Catálogo y Storefront base | 🔄 En progreso | 2-4 | [Fase 1](2026-04-16-fase1-catalogo-storefront.md) |
 | 2 | Checkout sin pago | 🔲 Pendiente | 5-6 | [Fase 2](2026-04-16-fase2-checkout-envios.md) |
 | 3 | Pasarelas de pago Colombia | 🔲 Pendiente | 7-9 | [Fase 3](2026-04-16-fase3-pasarelas-co.md) |
 | 4 | Cuenta cliente y facturación | 🔲 Pendiente | 10-11 | [Fase 4](2026-04-16-fase4-cuenta-facturacion.md) |
@@ -47,9 +47,9 @@
 | `postgres` | ✅ Corriendo | Railway interno |
 | `redis` | ✅ Corriendo | Railway interno |
 | `saleor-api` | ✅ Corriendo | proyecto `licona-store` en Railway |
-| `saleor-worker` | 🔲 Por crear | — |
-| `saleor-beat` | 🔲 Por crear | — |
-| `saleor-dashboard` | 🔲 Por crear | — |
+| `saleor-worker` | ✅ Corriendo | Railway interno |
+| `saleor-beat` | ✅ Corriendo | Railway interno |
+| `saleor-dashboard` | ✅ Corriendo | Railway (imagen oficial 3.22) |
 | `storefront` | 🔲 Por crear | — |
 | `app-wompi` | 🔲 Por crear | — |
 | `app-payu` | 🔲 Por crear | — |
@@ -75,6 +75,7 @@
 |---|---|---|---|
 | 2026-04-16 | Planificación | Spec recibida. Planes creados. CLAUDE.md actualizado. | Iniciar Fase 0 |
 | 2026-04-17 | Fase 0 — Deploy | Fork activo en GitHub. Postgres + Redis + saleor-api corriendo en Railway. Dockerfile optimizado (multi-stage, uv, sin cache mounts). railway.json con DOCKERFILE builder, nixpacksPlan vacío para evitar inyección de Node.js cache mounts. Port fix con `sh -c`. RSA_PRIVATE_KEY como PEM crudo. | Worker, beat, dashboard |
+| 2026-04-17 | Fase 0 — Completada | Todos los servicios corriendo: saleor-api (migraciones + uvicorn), saleor-worker (Celery), saleor-beat (Celery beat), saleor-dashboard (login ok). Fixes: ENTRYPOINT en CMD shell form, healthcheck removido de railway.json, fix migración discount.0052 para PG15+, dashboard fijado a 3.22. | Dominios custom, S3/CloudFront, GitHub Actions |
 
 ---
 
