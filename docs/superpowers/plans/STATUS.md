@@ -11,7 +11,7 @@
 | **Fase actual** | Fase 1 — Catálogo y Storefront base |
 | **Fecha de inicio** | 2026-04-16 |
 | **Última actualización** | 2026-04-17 |
-| **Próxima acción** | Crear repo `licona-storefront` (Nuxt 4) |
+| **Próxima acción** | Crear repo `licona-storefront` (Nuxt 4) — inicio Fase 1 |
 
 ---
 
@@ -46,10 +46,10 @@
 |---|---|---|
 | `postgres` | ✅ Corriendo | Railway interno |
 | `redis` | ✅ Corriendo | Railway interno |
-| `saleor-api` | ✅ Corriendo | proyecto `licona-store` en Railway |
-| `saleor-worker` | ✅ Corriendo | Railway interno |
-| `saleor-beat` | ✅ Corriendo | Railway interno |
-| `saleor-dashboard` | ✅ Corriendo | Railway (imagen oficial 3.22) |
+| `saleor-api` | ✅ Corriendo | https://saleor-api-production-a780.up.railway.app |
+| `saleor-worker` | ✅ Corriendo | Railway interno (Celery) |
+| `saleor-beat` | ✅ Corriendo | Railway interno (Celery beat) |
+| `saleor-dashboard` | ✅ Corriendo | https://saleor-dashboard-production-4a02.up.railway.app |
 | `storefront` | 🔲 Por crear | — |
 | `app-wompi` | 🔲 Por crear | — |
 | `app-payu` | 🔲 Por crear | — |
@@ -75,7 +75,7 @@
 |---|---|---|---|
 | 2026-04-16 | Planificación | Spec recibida. Planes creados. CLAUDE.md actualizado. | Iniciar Fase 0 |
 | 2026-04-17 | Fase 0 — Deploy | Fork activo en GitHub. Postgres + Redis + saleor-api corriendo en Railway. Dockerfile optimizado (multi-stage, uv, sin cache mounts). railway.json con DOCKERFILE builder, nixpacksPlan vacío para evitar inyección de Node.js cache mounts. Port fix con `sh -c`. RSA_PRIVATE_KEY como PEM crudo. | Worker, beat, dashboard |
-| 2026-04-17 | Fase 0 — Completada | Todos los servicios corriendo: saleor-api (migraciones + uvicorn), saleor-worker (Celery), saleor-beat (Celery beat), saleor-dashboard (login ok). Fixes: ENTRYPOINT en CMD shell form, healthcheck removido de railway.json, fix migración discount.0052 para PG15+, dashboard fijado a 3.22. | Dominios custom, S3/CloudFront, GitHub Actions |
+| 2026-04-17 | Fase 0 — Completada | Todos los servicios corriendo. S3+CloudFront operativo (imágenes en d38o6f3ivpuaig.cloudfront.net). Fixes aplicados: ENTRYPOINT→CMD shell form, healthcheck por servicio, discount.0052 para PG18, dashboard=3.22, PUBLIC_URL, AWS_MEDIA_BUCKET_NAME. | GitHub Actions (sync + build) |
 
 ---
 
