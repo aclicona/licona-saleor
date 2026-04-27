@@ -10,8 +10,8 @@
 |---|---|
 | **Fase actual** | Fase 3 — Pasarelas de pago Colombia |
 | **Fecha de inicio** | 2026-04-16 |
-| **Última actualización** | 2026-04-26 |
-| **Próxima acción** | Task 1: Scaffold `app-wompi` con Next.js 15 + APL |
+| **Última actualización** | 2026-04-27 |
+| **Próxima acción** | Crear servicio Railway `app-wompi` + credenciales Wompi sandbox → prueba E2E |
 
 ---
 
@@ -35,7 +35,7 @@
 | Repo | URL | Estado |
 |---|---|---|
 | `licona-saleor` | https://github.com/aclicona/licona-saleor | ✅ Activo (branch `stable/3.22`) |
-| `licona-storefront` | https://github.com/aclicona/licona-storefront | 🔄 En progreso (Fase 1) |
+| `licona-storefront` | https://github.com/aclicona/licona-storefront | ✅ Activo — flujo de pago completo |
 | `licona-saleor-apps` | https://github.com/aclicona/licona-saleor-apps | ✅ Activo — `app-envios` desplegado en Railway |
 
 ---
@@ -51,7 +51,7 @@
 | `saleor-beat` | ✅ Corriendo | Railway interno (Celery beat) |
 | `saleor-dashboard` | ✅ Corriendo | https://saleor-dashboard-production-4a02.up.railway.app |
 | `storefront` | ✅ Corriendo | https://licona-storefront-production.up.railway.app |
-| `app-wompi` | 🔲 Por crear | — |
+| `app-wompi` | 🔄 Código listo, pendiente despliegue | rama `feat/fase3-wompi` |
 | `app-payu` | 🔲 Por crear | — |
 | `app-mercadopago` | 🔲 Por crear | — |
 | `app-facturacion-co` | 🔲 Por crear | — |
@@ -79,6 +79,7 @@
 | 2026-04-17 | Fase 1 — Código base | Repo `licona-storefront` creado en GitHub. Nuxt 4, Tailwind v4 (CSS-first/@tailwindcss/vite), URQL+retryExchange, Codegen contra API real, componentes (ProductCard, ProductGrid, ProductGallery, ProductVariants), páginas (Home, PLP, PDP), endpoint revalidación ISR, Dockerfile. 3/3 tests Vitest. | Desplegar en Railway, agregar fuentes woff2 (Fraunces + Satoshi) |
 | 2026-04-25 | Fase 2 — Checkout y App Envíos | Checkout mutations GraphQL + codegen. `useCart` (persistencia en cookie), `useCheckout`, CartDrawer, CartItem, páginas checkout/direccion, checkout/envio, checkout/confirmacion. Monorepo `licona-saleor-apps` con `app-envios` (Fastify 5, webhook `SHIPPING_LIST_METHODS_FOR_CHECKOUT`, Servientrega/Coordinadora/TCC). Dockerfile. Rama `feat/fase2-checkout`. | Push `licona-storefront` a Railway, crear repo GitHub `licona-saleor-apps`, crear servicio Railway `app-envios`, instalar App en Dashboard Saleor |
 | 2026-04-26 | Fase 2 — Cierre + Fase 3 inicio | Fix `app.vue` (`<NuxtWelcome>` → `<NuxtLayout>`), layout `default.vue`, merge `feat/fase2-checkout` → `main`. Repo `licona-saleor-apps` creado en GitHub. `app-envios` desplegado en Railway e instalado en Dashboard. Fixes: campo `query` en manifest (requerido por Saleor), ruta `GET /` para iframe Dashboard, JWS verification reemplazando HMAC incorrecto. Paquete compartido `@licona/webhook-utils` con `verifySaleorWebhook` (RS256, payload detached). | Iniciar Task 1 Fase 3: scaffold `app-wompi` |
+| 2026-04-27 | Fase 3 — app-wompi + flujo de pago storefront | `app-wompi` completo: 6 handlers Transactions API (JWS), webhook entrante Wompi (HMAC), `WompiClient`, `SaleorClient`, manifest con `query`, EnvAPL, Dockerfile. Storefront: `payment.graphql`, codegen, `usePayment` (urql v2), `PaymentMethodSelector` dinámico (lee `availablePaymentGateways` de Saleor), `pago.vue`, `orden/[id].vue`. Selector de pasarelas sin hardcodeo — refleja automáticamente lo instalado en Dashboard. | Crear servicio `app-wompi` en Railway + credenciales Wompi sandbox |
 | 2026-04-27 | Proxy BFF + Railway private networking | Proxy `/api/graphql` en Nitro (BFF pattern). Diagnóstico completo de Railway private networking: IPv4 interna va por proxy TLS, IPv6 va directo al container. Fix encadenado: URL fallback correcta → env vars en Railway → `NUXT_PUBLIC_SALEOR_API_URL` → `--host=::` en Uvicorn (IPv6 dual-stack) → `X-Forwarded-Proto: https` para evitar `SECURE_SSL_REDIRECT` de Django → `preferGetMethod: false` en urql v2 (Saleor devuelve Playground HTML para GET). Proxy funcionando 100% vía red interna IPv6. | Iniciar Task 1 Fase 3: scaffold `app-wompi` |
 
 ---
@@ -105,6 +106,9 @@
 | Apps via manifest usan JWS/RS256, no HMAC | Saleor no asigna `secretKey` a webhooks registrados desde manifest — firma con su RSA privada | 2026-04-26 |
 | `@licona/webhook-utils` para verificación JWS | Paquete compartido en `packages/` reutilizable por todas las Apps del monorepo | 2026-04-26 |
 | Wompi como pasarela primaria | Cubre más métodos colombianos (PSE, Nequi, Daviplata, efectivo) | 2026-04-16 |
+| Selector de pasarelas dinámico (sin hardcodeo) | `availablePaymentGateways` de Saleor — instalar/desinstalar apps en Dashboard sin tocar código del storefront | 2026-04-27 |
+| EnvAPL en lugar de UpstashAPL | Un solo tenant (nuestra instancia Saleor) — token en variable de entorno Railway, sin costo extra | 2026-04-27 |
+| Fastify para todas las apps del monorepo | Consistencia con app-envios, builds más simples, control total sobre JWS verification | 2026-04-27 |
 
 ---
 
