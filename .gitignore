@@ -33,3 +33,6 @@ Pipfile
 
 # Exported results file
 django-queries-results.html
+
+# Estado local de Celery beat (se regenera en cada arranque) — cambio del fork
+celerybeat-schedule*

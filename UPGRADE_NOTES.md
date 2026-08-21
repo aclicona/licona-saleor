@@ -48,11 +48,52 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 - Modelos ni settings de Django
 - Código Python del core
 
+### 2026-04-29 — Carga de `.env` para desarrollo local (base: 3.22.48)
+
+**Archivos modificados:**
+
+- `manage.py`
+  - `from dotenv import load_dotenv` + `load_dotenv()` dentro de `if __name__ == "__main__":`,
+    antes del `os.environ.setdefault("DJANGO_SETTINGS_MODULE", ...)`.
+- `saleor/asgi/__init__.py`
+  - Mismo par de líneas a nivel de módulo, antes de `get_asgi_application()`.
+- `saleor/celeryconf.py`
+  - `from dotenv import load_dotenv` en los imports + `load_dotenv()` tras ellos.
+
+**Motivo:** upstream espera las variables ya exportadas en el entorno (en Railway las inyecta la
+plataforma). Para desarrollo local con `.env` hacía falta cargarlas explícitamente en los tres puntos
+de entrada: comandos de gestión, ASGI y Celery (worker y beat).
+
+**En producción es inocuo:** sin archivo `.env` presente, `load_dotenv()` es un no-op y las variables
+siguen viniendo del entorno de Railway.
+
+> ⚠️ **Riesgo conocido — `python-dotenv` no es dependencia directa.** Hoy llega de forma
+> **transitiva**, como extra de `uvicorn[standard]` y con marker
+> `platform_python_implementation != 'PyPy'` (ver `uv.lock`). Como el import es a nivel de módulo en
+> `saleor/asgi/__init__.py` y `saleor/celeryconf.py`, si un cambio de resolución de dependencias
+> dejara de traerlo, **los tres servicios (`saleor-api`, `saleor-worker`, `saleor-beat`) fallarían al
+> arrancar** con `ModuleNotFoundError`. Hoy no ocurre porque los tres comparten la misma imagen, que
+> sí instala `uvicorn[standard]`. Corrección pendiente: declarar `python-dotenv` como dependencia
+> directa en `pyproject.toml`.
+
+**Conflicto potencial al actualizar upstream:** bajo. Son adiciones en zonas estables de los tres
+archivos; un cambio de upstream en las mismas líneas es improbable pero revisable.
+
+**Archivos modificados (higiene):**
+
+- `.gitignore` — añadido `celerybeat-schedule*` (estado local de Celery beat, se regenera).
+
 ---
 
 ## Pendiente de upstream
 
 Ninguno.
+
+## Deuda del fork
+
+| Tema | Detalle |
+|---|---|
+| `python-dotenv` transitivo | Declararlo directo en `pyproject.toml` — ver nota del 2026-04-29 |
 
 ---
 
