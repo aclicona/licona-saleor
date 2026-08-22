@@ -82,6 +82,8 @@ siguen viniendo del entorno de Railway.
 > arrancar** con `ModuleNotFoundError`. Hoy no ocurre porque los tres comparten la misma imagen, que
 > sí instala `uvicorn[standard]`. Corrección pendiente: declarar `python-dotenv` como dependencia
 > directa en `pyproject.toml`.
+>
+> ✅ **Resuelto el 2026-08-22** — ver la entrada de esa fecha más abajo.
 
 **Conflicto potencial al actualizar upstream:** bajo. Son adiciones en zonas estables de los tres
 archivos; un cambio de upstream en las mismas líneas es improbable pero revisable.
@@ -89,6 +91,47 @@ archivos; un cambio de upstream en las mismas líneas es improbable pero revisab
 **Archivos modificados (higiene):**
 
 - `.gitignore` — añadido `celerybeat-schedule*` (estado local de Celery beat, se regenera).
+
+### 2026-08-22 — `python-dotenv` como dependencia directa (base: 3.22.48)
+
+**Archivos modificados:**
+
+- `pyproject.toml`
+  - Añadida `"python-dotenv>=1.1.1,<2"` a `[project].dependencies`, en orden alfabético entre
+    `python-dateutil` y `python-http-client`, con el estilo `>=mínimo,<major siguiente` que usa el
+    resto del archivo. El mínimo es la versión que ya estaba resuelta en el lock, así que la
+    restricción no fuerza ningún cambio de resolución.
+- `uv.lock`
+  - Regenerado con `uv lock` (uv 0.8.14, la misma versión que fija el hook `uv-lock` de
+    `.pre-commit-config.yaml`; el `Dockerfile` usa la serie `0.8`). El diff son **exactamente dos
+    líneas añadidas**: `python-dotenv` entra en `[[package]] name = "saleor"` → `dependencies` y en
+    `metadata.requires-dist`. Ninguna versión de ningún paquete cambió; siguen siendo 239 paquetes
+    resueltos y `python-dotenv` sigue clavada en 1.1.1.
+
+**Motivo (por qué, no solo qué):** desde el 2026-04-29 hay `from dotenv import load_dotenv` **a nivel
+de módulo** en `saleor/asgi/__init__.py` y `saleor/celeryconf.py` (y dentro de `__main__` en
+`manage.py`), pero el paquete nunca se declaró. Llegaba de rebote como extra de `uvicorn[standard]`,
+y encima condicionado al marker `platform_python_implementation != 'PyPy'`.
+
+Que hoy funcione es una coincidencia de empaquetado, no un contrato: los tres servicios de producción
+—`saleor-api`, `saleor-worker` y `saleor-beat`— comparten **la misma imagen Docker**, y esa imagen
+instala `uvicorn[standard]` porque la API sirve con uvicorn. El worker y el beat **no necesitan
+uvicorn para nada**; el día que se construya una imagen separada y más delgada para ellos —o que un
+upgrade de `uvicorn` mueva `python-dotenv` fuera del extra `standard`—, los tres arrancarían con
+`ModuleNotFoundError: No module named 'dotenv'` **antes de emitir un solo log útil**. Es un fallo de
+arranque, silencioso en la revisión de código y ruidoso en producción.
+
+Declararla directa convierte esa dependencia implícita en explícita: el resolvedor la garantiza
+aunque `uvicorn` desaparezca del árbol.
+
+**Verificación:** `uv tree --invert --package python-dotenv` pasa de listar un solo consumidor
+(`uvicorn (extra: standard)`) a listar dos (`saleor` y `uvicorn`). Además `manage.py check` limpio y
+`ruff check .` en `All checks passed!`.
+
+**Conflicto potencial al actualizar upstream:** medio-bajo. `pyproject.toml` y `uv.lock` son
+archivos que upstream toca a menudo (bumps de dependencias), así que el sync semanal puede marcar
+conflicto ahí. La resolución es siempre la misma: conservar la línea de `python-dotenv` y regenerar
+el lock. Upstream no usa `python-dotenv`, por lo que nunca va a añadir la línea por su cuenta.
 
 ---
 
@@ -100,7 +143,7 @@ Ninguno.
 
 | Tema | Detalle |
 |---|---|
-| `python-dotenv` transitivo | Declararlo directo en `pyproject.toml` — ver nota del 2026-04-29 |
+| — | Sin deuda abierta. (`python-dotenv` transitivo: **resuelto el 2026-08-22**.) |
 
 ---
 
