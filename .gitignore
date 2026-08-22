@@ -36,3 +36,7 @@ django-queries-results.html
 
 # Estado local de Celery beat (se regenera en cada arranque) — cambio del fork
 celerybeat-schedule*
+
+# Worktrees de sesiones de hardening: el pre-check del nocturno aborta si el
+# arbol esta sucio, y un worktree suelto aqui bloquearia la corrida siguiente.
+.worktrees/

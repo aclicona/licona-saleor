@@ -9,6 +9,8 @@ https://docs.djangoproject.com/en/3.1/howto/deployment/asgi/
 import gc
 import os
 
+from dotenv import load_dotenv
+
 from ..core.telemetry import initialize_telemetry
 from .asgi_handler import get_asgi_application
 from .cors_handler import cors_handler
@@ -31,7 +33,6 @@ def preload_app() -> None:
     gc.freeze()  # mark anything that remains as uncollectable to speed up future collections
 
 
-from dotenv import load_dotenv
 load_dotenv()
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "saleor.settings")

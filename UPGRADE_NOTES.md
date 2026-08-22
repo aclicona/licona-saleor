@@ -56,7 +56,14 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
   - `from dotenv import load_dotenv` + `load_dotenv()` dentro de `if __name__ == "__main__":`,
     antes del `os.environ.setdefault("DJANGO_SETTINGS_MODULE", ...)`.
 - `saleor/asgi/__init__.py`
-  - Mismo par de líneas a nivel de módulo, antes de `get_asgi_application()`.
+  - `from dotenv import load_dotenv` en el bloque de imports de cabecera (como third-party, entre la
+    stdlib y los imports relativos) + `load_dotenv()` a nivel de módulo antes del
+    `os.environ.setdefault("DJANGO_SETTINGS_MODULE", ...)`.
+  - **Corregido el 2026-08-22:** el import se había dejado suelto en la línea 34, después de las
+    definiciones de función. `ruff check .` lo marcaba con `E402` (module level import not at top of
+    file) e `I001` (import block un-sorted) — eran los **únicos 2 errores de lint del fork entero**.
+    Mover el import a la cabecera deja `ruff check .` en `All checks passed!`. La posición de la
+    **llamada** sí importa (tiene que preceder a la lectura de settings); la del import no.
 - `saleor/celeryconf.py`
   - `from dotenv import load_dotenv` en los imports + `load_dotenv()` tras ellos.
 
