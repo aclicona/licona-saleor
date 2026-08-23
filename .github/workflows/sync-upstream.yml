@@ -61,24 +61,84 @@ jobs:
         if: steps.check_pr.outputs.pr_number == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.upstream_tag.outputs.tag }}
         run: |
-          TAG=${{ steps.upstream_tag.outputs.tag }}
+          set -uo pipefail
+
           BRANCH="sync/upstream-$TAG"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          BASE_SHA=$(git rev-parse HEAD)
           git checkout -b "$BRANCH"
-          git merge "refs/tags/$TAG" --no-edit || true
+
+          # El merge de un fork con 19 parches de diferencia CONFLICTÚA — es lo normal,
+          # no la excepción. Antes esto era `git merge ... || true`, y ese `|| true` era
+          # el agujero: un merge conflictivo no deja commit, la rama quedaba idéntica a
+          # la base, y `gh pr create` moría con "No commits between". Es exactamente lo
+          # que pasó en el primer run real (2026-08-22, run 32610731180): conflictos en
+          # AGENTS.md y uv.lock, y una rama vacía empujada como si nada.
+          #
+          # Los marcadores de conflicto se commitean A PROPÓSITO: es lo que convierte el
+          # conflicto en un PR revisable, donde un humano resuelve con todo el contexto
+          # a la vista. Un merge que falla en silencio no es "sin conflictos".
+          CONFLICTED=""
+          if ! git merge "refs/tags/$TAG" --no-edit; then
+            CONFLICTED=$(git diff --name-only --diff-filter=U | sed 's/^/- `/;s/$/`/')
+            git add -A
+            git commit --no-verify -m "merge: upstream $TAG — CONFLICTOS SIN RESOLVER"
+          fi
+
+          # Si el tag ya era ancestro, el merge no aporta nada y no hay PR que abrir.
+          # Sin este corte, cada lunes se empuja una rama vacía y el job falla.
+          if git diff --quiet "$BASE_SHA" HEAD; then
+            echo "El fork ya contiene $TAG — nada que sincronizar."
+            exit 0
+          fi
 
           git push origin "$BRANCH" --force
 
+          {
+            echo "Sync automático con \`saleor/saleor@$TAG\`."
+            echo
+            if [ -n "$CONFLICTED" ]; then
+              echo "## ⚠️ Este PR tiene conflictos SIN RESOLVER"
+              echo
+              echo "Los marcadores de conflicto **están commiteados** en la rama, a propósito:"
+              echo "es la única forma de que el conflicto sea revisable. **No mergear así.**"
+              echo
+              echo "Archivos en conflicto:"
+              echo
+              echo "$CONFLICTED"
+              echo
+              echo "Resolver sobre \`$BRANCH\`, commitear, y recién ahí sacar el PR de draft."
+              echo
+            fi
+            echo "## Antes de mergear"
+            echo
+            echo "1. Revisar \`UPGRADE_NOTES.md\` — ahí está todo lo que este fork cambió"
+            echo "   respecto a upstream, que es donde aparecen los conflictos."
+            echo "2. Correr las migraciones contra una copia de la BD, no solo la suite."
+            echo "3. Verificar que el esquema GraphQL no rompa el codegen del storefront."
+          } > /tmp/pr-body.md
+
+          # Draft cuando hay conflictos: impide que un merge accidental meta marcadores
+          # de conflicto en `stable/3.22`.
+          DRAFT=""
+          TITLE="chore: sync upstream Saleor $TAG"
+          if [ -n "$CONFLICTED" ]; then
+            DRAFT="--draft"
+            TITLE="chore: sync upstream Saleor $TAG — ⚠️ CON CONFLICTOS"
+          fi
+
           gh pr create \
-            --title "chore: sync upstream Saleor $TAG" \
-            --body "Automated sync with saleor/saleor@$TAG. Review conflicts and run migration tests before merging. See UPGRADE_NOTES.md for local changes to watch for conflicts." \
+            --title "$TITLE" \
+            --body-file /tmp/pr-body.md \
             --base stable/3.22 \
             --head "$BRANCH" \
-            --label "upstream-sync"
+            --label "upstream-sync" \
+            $DRAFT
 
   # ── Aviso de minor nuevo ────────────────────────────────────────────────────
   # El job `sync` es ciego a los minors por diseño, así que sin esto nadie se entera
