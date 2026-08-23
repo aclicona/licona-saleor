@@ -1,5 +1,13 @@
 name: Sync with Saleor upstream
 
+# ⚠️ `schedule` SOLO dispara desde la rama por defecto del repositorio.
+# Este workflow vive en `stable/3.22`, y por eso esa es la rama por defecto de
+# `aclicona/licona-saleor` (se cambió el 2026-08-22). Entre abril y agosto de 2026 la
+# rama por defecto fue `main` y este workflow no corrió NI UNA SOLA VEZ: GitHub ni
+# siquiera lo listaba (`gh workflow list` no lo mostraba y la API respondía
+# "not found on the default branch"). Cuatro meses sin sincronizar y sin ningún aviso.
+# Si alguien vuelve a poner `main` por defecto, esto se apaga en silencio otra vez.
+
 on:
   schedule:
     # Cada lunes a las 9:00 UTC
@@ -7,6 +15,10 @@ on:
   workflow_dispatch:
 
 jobs:
+  # ── Parches dentro del minor actual (3.22.x) ────────────────────────────────
+  # Deliberadamente NO cruza a un minor nuevo: Saleor solo garantiza migraciones sin
+  # downtime entre minors consecutivos, así que el salto de minor es una decisión
+  # humana planificada, no un PR automático. De eso avisa el job `check-new-minor`.
   sync:
     runs-on: ubuntu-latest
     permissions:
@@ -16,6 +28,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # Explícito a propósito: sin `ref`, el checkout toma la rama por defecto.
+          # Eso funciona hoy, pero ata el workflow a una configuración del repo que
+          # ya falló una vez. Fijarla aquí hace el workflow correcto por sí mismo.
+          ref: stable/3.22
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -63,3 +79,120 @@ jobs:
             --base stable/3.22 \
             --head "$BRANCH" \
             --label "upstream-sync"
+
+  # ── Aviso de minor nuevo ────────────────────────────────────────────────────
+  # El job `sync` es ciego a los minors por diseño, así que sin esto nadie se entera
+  # de que salió 3.23 hasta que alguien lo mira a mano. Y como no se pueden saltar
+  # minors, enterarse tarde no cuesta un upgrade: cuesta todos los intermedios.
+  # No abre un PR — abre un issue. El salto de minor lo decide y lo planifica un humano.
+  check-new-minor:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: stable/3.22
+          fetch-depth: 0
+
+      - name: Fetch upstream tags
+        run: |
+          git remote add upstream https://github.com/saleor/saleor.git || true
+          git fetch upstream --tags
+
+      - name: Detectar el siguiente minor
+        id: next
+        run: |
+          set -euo pipefail
+
+          CURRENT=$(grep -m1 '^version' pyproject.toml | sed -E 's/version = "([0-9]+\.[0-9]+).*/\1/')
+          MAJOR=${CURRENT%%.*}
+          MINOR=${CURRENT##*.}
+          NEXT="${MAJOR}.$((MINOR + 1))"
+
+          # Último parche ESTABLE del siguiente minor. El filtro `[0-9]+$` descarta
+          # rc/alpha: un 3.23.26-rc.1 no es motivo para planear un upgrade.
+          LATEST=$(git tag -l "${NEXT}.*" --sort=-v:refname \
+                   | grep -E "^${MAJOR}\.$((MINOR + 1))\.[0-9]+$" | head -1 || true)
+
+          # Cuántos minors hay por delante en total. Uno es rutina; tres es deuda.
+          ALL_MINORS=$(git tag -l --sort=-v:refname \
+                       | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+                       | sed -E 's/^([0-9]+\.[0-9]+)\..*/\1/' | sort -u -V)
+          BEHIND=$(echo "$ALL_MINORS" | awk -v c="$CURRENT" 'seen {n++} $0 == c {seen=1} END {print n+0}')
+
+          {
+            echo "current=$CURRENT"
+            echo "next=$NEXT"
+            echo "latest=$LATEST"
+            echo "behind=$BEHIND"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Fork en $CURRENT | siguiente minor: $NEXT (${LATEST:-aún no publicado}) | minors por delante: $BEHIND"
+
+      - name: Abrir issue si el siguiente minor ya está publicado
+        if: steps.next.outputs.latest != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT: ${{ steps.next.outputs.current }}
+          NEXT: ${{ steps.next.outputs.next }}
+          LATEST: ${{ steps.next.outputs.latest }}
+          BEHIND: ${{ steps.next.outputs.behind }}
+        run: |
+          set -euo pipefail
+
+          TITLE="chore: Saleor ${NEXT} disponible — siguiente minor del fork"
+
+          # Idempotencia: un issue por minor, no uno por lunes. Se busca por título
+          # exacto entre los abiertos; si se cierra a mano, no vuelve a abrirse hasta
+          # que el fork avance de minor y el título cambie.
+          EXISTING=$(gh issue list --state open --label upstream-minor --limit 100 \
+                     --json number,title \
+                     | jq -r --arg t "$TITLE" 'map(select(.title == $t)) | .[0].number // empty')
+
+          if [ -n "$EXISTING" ]; then
+            echo "Ya existe el issue #$EXISTING para ${NEXT} — nada que hacer."
+            exit 0
+          fi
+
+          cat > /tmp/issue-body.md <<EOF
+          El fork está en **${CURRENT}** y upstream ya publicó **${LATEST}**.
+          Minors por delante en total: **${BEHIND}**.
+
+          ## Por qué esto es un issue y no un PR
+
+          Saleor solo garantiza migraciones sin downtime **entre minors consecutivos**. No se
+          puede saltar de ${CURRENT} a un minor posterior directamente: hay que pasar por
+          ${NEXT} primero. Por eso el salto de minor es una decisión humana planificada y no un
+          merge automático — el job \`sync\` de este mismo workflow solo trae parches dentro de
+          ${CURRENT}.x.
+
+          Cuantos más minors se acumulen, más caro sale: no se paga un upgrade, se pagan todos
+          los intermedios, cada uno con su tanda de migraciones.
+
+          ## Qué hay que hacer
+
+          1. Leer el changelog de upstream entre \`${CURRENT}\` y \`${LATEST}\`, con foco en
+             migraciones y cambios de esquema GraphQL.
+          2. Revisar \`UPGRADE_NOTES.md\` — ahí está todo lo que este fork cambió respecto a
+             upstream, que es exactamente donde van a aparecer los conflictos.
+          3. Rama de upgrade desde \`stable/${CURRENT}\`, merge de \`refs/tags/${LATEST}\`,
+             resolver conflictos.
+          4. Correr las migraciones contra una copia de la BD, no solo la suite.
+          5. Verificar el storefront y las apps de pago contra la API nueva: el esquema GraphQL
+             cambia entre minors y el codegen del storefront depende de él.
+          6. Al terminar: actualizar \`version\` en \`pyproject.toml\`, renombrar la rama base a
+             \`stable/${NEXT}\` y **cambiar la rama por defecto del repo** — si no, este
+             workflow deja de correr (ver el comentario al inicio de \`sync-upstream.yml\`).
+
+          ---
+          _Abierto automáticamente por \`.github/workflows/sync-upstream.yml\`. Se reabre cada
+          lunes mientras el fork siga en ${CURRENT}; ciérralo cuando el upgrade esté planificado._
+          EOF
+
+          gh issue create \
+            --title "$TITLE" \
+            --label "upstream-minor" \
+            --body-file /tmp/issue-body.md
