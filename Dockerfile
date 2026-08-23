@@ -9,7 +9,8 @@ RUN apt-get -y update \
 
 # Install Python dependencies
 WORKDIR /app
-COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.1@sha256:cf4eedcaa81655197f625739489effcbe71b61ceb1506f332c3facae5deceded \
+  /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 UV_SYSTEM_PYTHON=1 UV_PROJECT_ENVIRONMENT=/usr/local
 COPY uv.lock pyproject.toml ./
 RUN uv sync --locked --no-install-project --no-editable
