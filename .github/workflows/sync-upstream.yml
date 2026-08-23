@@ -53,6 +53,13 @@ jobs:
         id: check_pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ⚠️ Sin esto, `gh` resuelve el repo del FORK a su padre (`saleor/saleor`) y
+          # opera contra el repo equivocado en silencio: `gh pr list` devolvía vacío
+          # siempre —consultaba los PRs de Saleor— y `--label` fallaba con
+          # "'upstream-sync' not found" porque buscaba la label allá (run 32610898534).
+          # El mismo síntoma delató el problema en local: `gh run list` respondió con
+          # una URL `api.github.com/repos/saleor/saleor/...`.
+          GH_REPO: ${{ github.repository }}
         run: |
           EXISTING=$(gh pr list --head "sync/upstream-${{ steps.upstream_tag.outputs.tag }}" --json number -q '.[0].number')
           echo "pr_number=$EXISTING" >> $GITHUB_OUTPUT
@@ -61,6 +68,7 @@ jobs:
         if: steps.check_pr.outputs.pr_number == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}   # ver nota en el paso anterior
           TAG: ${{ steps.upstream_tag.outputs.tag }}
         run: |
           set -uo pipefail
@@ -83,18 +91,41 @@ jobs:
           # Los marcadores de conflicto se commitean A PROPÓSITO: es lo que convierte el
           # conflicto en un PR revisable, donde un humano resuelve con todo el contexto
           # a la vista. Un merge que falla en silencio no es "sin conflictos".
-          CONFLICTED=""
-          if ! git merge "refs/tags/$TAG" --no-edit; then
-            CONFLICTED=$(git diff --name-only --diff-filter=U | sed 's/^/- `/;s/$/`/')
-            git add -A
-            git commit --no-verify -m "merge: upstream $TAG — CONFLICTOS SIN RESOLVER"
+          # `--no-commit`: el merge deja todo en el índice sin commitear, para poder
+          # sacar los workflows de upstream ANTES de que exista el commit.
+          git merge --no-commit --no-ff "refs/tags/$TAG" || true
+
+          # Los workflows de upstream NO se traen, y no es preferencia: el
+          # `secrets.GITHUB_TOKEN` tiene PROHIBIDO empujar cambios bajo
+          # `.github/workflows/`. GitHub rechaza el push entero con
+          #   "refusing to allow a GitHub App to create or update workflow ...
+          #    without `workflows` permission"
+          # y no hay clave en `permissions:` que lo habilite — solo un PAT lo saltaría.
+          # (Pasó en el run 32610898534 con `changelog-check.yml`.)
+          #
+          # Se descartan a propósito en vez de pedir un PAT: este fork no usa el CI de
+          # upstream —despliega por Railway y tiene sus propios workflows—, así que no
+          # se pierde nada en uso, y se evita una credencial de larga vida que caduca
+          # en silencio. Si algún día hiciera falta un workflow de upstream, se trae a
+          # mano. Nota: esto significa que `.github/workflows/` del fork NO sigue a
+          # upstream. Es la decisión tomada el 2026-08-22, no un descuido.
+          git checkout "$BASE_SHA" -- .github/workflows/ 2>/dev/null || true
+
+          CONFLICTED=$(git diff --name-only --diff-filter=U | sed 's/^/- `/;s/$/`/')
+          git add -A
+
+          # Si el tag ya era ancestro —o lo único que traía eran workflows—, el merge no
+          # aporta nada y no hay PR que abrir. Sin este corte, cada lunes sin novedades
+          # se empuja una rama vacía y el job falla.
+          if git diff --cached --quiet "$BASE_SHA"; then
+            echo "El fork ya contiene $TAG (descontando .github/workflows/) — nada que sincronizar."
+            exit 0
           fi
 
-          # Si el tag ya era ancestro, el merge no aporta nada y no hay PR que abrir.
-          # Sin este corte, cada lunes se empuja una rama vacía y el job falla.
-          if git diff --quiet "$BASE_SHA" HEAD; then
-            echo "El fork ya contiene $TAG — nada que sincronizar."
-            exit 0
+          if [ -n "$CONFLICTED" ]; then
+            git commit -m "merge: upstream $TAG — CONFLICTOS SIN RESOLVER"
+          else
+            git commit -m "merge: upstream $TAG"
           fi
 
           git push origin "$BRANCH" --force
@@ -196,6 +227,7 @@ jobs:
         if: steps.next.outputs.latest != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}   # ver nota en el job `sync`
           CURRENT: ${{ steps.next.outputs.current }}
           NEXT: ${{ steps.next.outputs.next }}
           LATEST: ${{ steps.next.outputs.latest }}
