@@ -155,16 +155,103 @@ Ninguno.
 
 ---
 
+## Cuánto divergimos de upstream — medido, no estimado
+
+Esto es lo que hace manejable cada actualización, y conviene volver a medirlo antes de
+cada upgrade (`git diff --numstat <tag-base> stable/3.22`):
+
+**Medición del 2026-08-22, contra `3.22.48`: 37 commits propios, de los cuales solo
+20 líneas tocan código de Saleor.**
+
+| Archivo | Líneas | Qué es |
+|---|---|---|
+| `manage.py` | +3 | `load_dotenv()` |
+| `saleor/asgi/__init__.py` | +4 | `load_dotenv()` |
+| `saleor/celeryconf.py` | +3 | `load_dotenv()` |
+| `pyproject.toml` | +1 | `python-dotenv` como dependencia directa |
+| `saleor/discount/migrations/0052_drop_sales_constraints.py` | +7 −3 | fix PostgreSQL 15+ |
+| `uv.lock` | +2 | consecuencia de la anterior |
+
+Todo lo demás son **archivos que upstream no tiene** —`railway.json`,
+`scripts/railway-entrypoint.sh`, `scripts/wait-for-db.sh`, este archivo, nuestros tres
+workflows, `docs/superpowers/`— y **no pueden conflictuar**: no hay nada del otro lado
+con qué chocar.
+
+**El producto no vive en este repo.** `storefront` y `saleor-apps` hablan con Saleor por
+GraphQL, no por sus internals. Por eso el riesgo de un upgrade está en **el esquema
+GraphQL**, no en este fork.
+
+### Los tres conflictos previsibles
+
+| Archivo | Por qué | Cómo se resuelve |
+|---|---|---|
+| `AGENTS.md` | Reemplazamos el de upstream entero | **Automático** vía `merge=ours` en `.gitattributes` — requiere `git config merge.ours.driver true` (ver abajo) |
+| `uv.lock` | Upstream lo marca `-merge`: siempre conflictúa, a propósito | **Regenerar**, no resolver: `uv tool run uv@0.8.14 lock` |
+| `0052_drop_sales_constraints.py` | Único cambio nuestro con lógica propia | **Revisar a mano** si upstream tocó esa migración. Es el único que merece atención real |
+
+---
+
 ## Cómo hacer una actualización
 
-1. El workflow `sync-upstream.yml` abre un PR automático cada lunes con el latest patch de la minor actual.
-2. Revisar el PR: verificar que no haya conflictos en `Dockerfile` ni en `scripts/`.
-3. Hacer merge del PR a `stable/3.22`.
-4. Verificar en staging que las migraciones corren sin errores.
-5. Actualizar la tabla de arriba con la nueva versión.
+### Requisito de una sola vez, en cada clone nuevo
 
-Para saltar de minor (ej. 3.22 → 3.23):
-1. Crear rama `stable/3.23` desde el tag `3.23.x` más reciente.
-2. Aplicar manualmente los cambios de esta lista a la nueva rama.
-3. Correr `python manage.py migrate` en staging y verificar que no haya errores.
-4. Actualizar `build-image.yml` y `sync-upstream.yml` para apuntar a `stable/3.23`.
+```sh
+git config merge.ours.driver true
+```
+
+Sin esto, el `merge=ours` que `.gitattributes` declara para `AGENTS.md` **no hace nada**
+y el archivo conflictúa en cada sync. El driver `ours` no viene definido en git y la
+config no se versiona. `sync-upstream.yml` lo ejecuta solo; los clones locales no.
+
+### Parche dentro de la minor actual (3.22.x → 3.22.y)
+
+1. `sync-upstream.yml` abre el PR cada lunes 9:00 UTC. Si viene con conflictos llega
+   como **draft** y con el título `⚠️ CON CONFLICTOS`; los marcadores están commiteados
+   a propósito, para que el PR sea revisable.
+2. Resolver sobre la rama del PR: `uv.lock` regenerándolo, el resto a mano.
+3. Revisar la sección "Cambios aplicados" de este archivo: es la lista de sitios donde
+   nuestro código y el de upstream pueden pisarse.
+4. Migraciones **contra una copia de la BD**, no solo la suite.
+5. `npm run codegen` en el storefront: si el esquema GraphQL cambió, TypeScript lo dice.
+6. Sacar el PR de draft y mergear a `stable/3.22`.
+7. Anotar la versión nueva en el historial de abajo.
+
+### Salto de minor (3.22 → 3.23)
+
+**Primero hay que estar al día dentro de la minor actual.** No se salta desde un punto
+atrasado: se resuelve el sync de parches, se verifica, y recién ahí se sube de minor.
+
+Dos estrategias, y la divergencia medida arriba decide cuál:
+
+**A · Re-fork limpio (recomendada mientras la divergencia siga siendo de ~20 líneas)**
+
+1. Rama `stable/3.23` desde el tag `3.23.x` estable más reciente.
+2. Reaplicar los cambios de la sección "Cambios aplicados" — son pocos y están listados.
+3. Copiar los archivos que upstream no tiene (`railway.json`, `scripts/`, workflows,
+   este archivo).
+4. Migraciones contra copia de la BD + `npm run codegen` en el storefront.
+
+Ventaja: el árbol queda idéntico a upstream salvo lo nuestro, sin arrastrar historia de
+merges. Desventaja: reaplicar a mano, y hay que acordarse de todo — por eso la sección
+"Cambios aplicados" es obligatoria de mantener.
+
+**B · Merge del tag de la minor nueva**
+
+`git merge refs/tags/3.23.x` sobre `stable/3.22`. Preserva la historia y git hace el
+grueso del trabajo, pero arrastra un merge grande. Preferible **si algún día la
+divergencia crece** y reaplicar a mano deja de ser realista.
+
+**Cierre del salto, con cualquiera de las dos:**
+
+1. Actualizar `version` en `pyproject.toml`.
+2. Apuntar `build-image.yml` y `sync-upstream.yml` a `stable/3.23` (los `ref:` de los
+   checkouts y el `--base` del PR).
+3. ⚠️ **Cambiar la rama por defecto del repo a `stable/3.23`.**
+   ```sh
+   gh repo edit aclicona/licona-saleor --default-branch stable/3.23
+   ```
+   **No es cosmético.** `schedule` de GitHub Actions solo dispara desde la rama por
+   defecto: si se olvida, el sync deja de correr **sin ningún aviso**. Es exactamente lo
+   que pasó entre abril y agosto de 2026 — cuatro meses sin sincronizar, descubiertos
+   por casualidad.
+4. Cerrar el issue de `upstream-minor` correspondiente.
