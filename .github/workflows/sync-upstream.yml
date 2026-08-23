@@ -78,6 +78,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+          # Activa el `merge=ours` que `.gitattributes` declara para AGENTS.md. El
+          # driver `ours` NO viene definido en git y la config no se versiona, así que
+          # sin esta línea el atributo es decorativo y AGENTS.md conflictúa en todos los
+          # syncs. Comprobado el 2026-08-22.
+          git config merge.ours.driver true
+
           BASE_SHA=$(git rev-parse HEAD)
           git checkout -b "$BRANCH"
 
