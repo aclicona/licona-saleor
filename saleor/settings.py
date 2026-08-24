@@ -839,6 +839,14 @@ def SENTRY_INIT(dsn: str, sentry_opts: dict):
         "street_address_1",
         "street_address_2",
         "user_email",
+        # Order/customer filter input (`customer` CharFilter) accepts a raw
+        # email or name fragment as a scalar string value, so the PII lives
+        # directly under the `customer` key rather than a nested `email` key.
+        # It must be denylisted by name; recursion alone won't redact it.
+        "customer",
+        "line1",
+        "line2",
+        "from_street_address",
     ]
 
     sentry_sdk.init(
@@ -846,7 +854,9 @@ def SENTRY_INIT(dsn: str, sentry_opts: dict):
         release=__version__,
         send_default_pii=False,
         event_scrubber=EventScrubber(
-            denylist=SALEOR_DENYLIST, pii_denylist=SALEOR_PII_DENYLIST
+            denylist=SALEOR_DENYLIST,
+            pii_denylist=SALEOR_PII_DENYLIST,
+            recursive=True,
         ),
         **sentry_opts,
     )
@@ -876,6 +886,32 @@ GRAPHQL_QUERY_MAX_COMPLEXITY = int(
 # may build a query that requests for potentially few thousands of entities.
 # Set FEDERATED_QUERY_MAX_ENTITIES=0 in env to disable (not recommended)
 FEDERATED_QUERY_MAX_ENTITIES = int(os.environ.get("FEDERATED_QUERY_MAX_ENTITIES", 100))
+
+# Optional - Python import path of a GraphQL resolver to allow Saleor to return
+# announcements. See ``saleor/site/apps.py`` and ``saleor/graphql/shop/types.py``
+# for details around the Announcements API.
+#
+# Value must be an import path, e.g.:
+#   SHOP_ANNOUNCEMENT_RESOLVER_IMPORT="saleor.custom.announcements.resolve_announcements"
+#
+# Where ``resolve_announcements`` should have the following signature:
+#
+# >>> from saleor.graphql.shop.types import Announcement
+# >>>
+# >>> def resolve_announcements() -> list[Announcement]: ...
+SHOP_ANNOUNCEMENT_RESOLVER_IMPORT = None
+
+# Optional - Python import path of a function returning the namespace (the
+# Postgres `classid` integer) used by ``saleor.core.db.locks`` for advisory
+# locks. When unset, the built-in default namespace is used.
+#
+# Value must be an import path, e.g.:
+#   ADVISORY_LOCK_NAMESPACE_IMPORT="saleor.custom.locks.get_namespace"
+#
+# Where ``get_namespace`` should have the following signature:
+#
+# >>> def get_namespace() -> int: ...
+ADVISORY_LOCK_NAMESPACE_IMPORT = None
 
 BUILTIN_PLUGINS = [
     "saleor.plugins.avatax.plugin.DeprecatedAvataxPlugin",
@@ -989,6 +1025,14 @@ PRODUCT_MAX_INDEXED_ATTRIBUTES = 1000
 PRODUCT_MAX_INDEXED_ATTRIBUTE_VALUES = 100
 PRODUCT_MAX_INDEXED_VARIANTS = 1000
 
+
+# Sets the default behavior for new Saleor installations.
+# When set to 'False', it disables account merging by default in DB
+# migrations, and when to 'True', it enables account merging but requires
+# password confirmation.
+# This setting has no effect against existing Saleor installations and
+# shouldn't be changed.
+ACCOUNT_CONFIRM_ASSOCIATE_ANONYMOUS_OBJECTS = False
 
 # Patch SubscriberExecutionContext class from `graphql-core-legacy` package
 # to fix bug causing not returning errors for subscription queries.

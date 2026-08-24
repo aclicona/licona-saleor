@@ -137,7 +137,9 @@ el lock. Upstream no usa `python-dotenv`, por lo que nunca va a añadir la líne
 
 ## Pendiente de upstream
 
-Ninguno.
+| Tema | Estado a fecha 3.22.67 |
+|---|---|
+| Fix de `discount.0052` para PostgreSQL 15+ | **Upstream sigue sin arreglarlo.** Verificado el 2026-08-24: `git diff 3.22.48 3.22.67 -- saleor/discount/` sale vacío y nuestro parche difiere de ambos tags en las mismas 7/−3 líneas. Nuestro parche sigue siendo necesario — no volver a auditarlo desde cero en el próximo sync, mirar solo si ese diff deja de estar vacío. |
 
 ## Deuda del fork
 
@@ -152,6 +154,26 @@ Ninguno.
 | Fecha | De | A | PR | Notas |
 |---|---|---|---|---|
 | 2026-04-16 | — | 3.22.48 | — | Versión base inicial del fork |
+| 2026-08-24 | 3.22.48 | 3.22.67 | [#3](https://github.com/aclicona/licona-saleor/pull/3) | 19 parches. **Dos CVE**: 2026-48744 (bypass de autorización) y 2026-44472 (secuestro de fusión de cuentas). Único conflicto `uv.lock`, regenerado. 3 migraciones, ninguna destructiva. Cero breaking changes de GraphQL. Ver [bitácora](../docs/hardening/sessions/2026-08-24-sync-upstream-3.22.67.md) |
+
+---
+
+## Cambios de comportamiento heredados de upstream (no son parches nuestros)
+
+Un sync no solo trae fixes: trae **cambios de comportamiento que nadie pidió**. Estos son
+los del rango `3.22.48 → 3.22.67`, auditados el 2026-08-24. Ninguno rompe hoy, pero los
+tres cambian lo que la API hace.
+
+| Cambio | Qué cambia | ¿Nos toca hoy? |
+|---|---|---|
+| **`accountConfirmMergeMode`** (fix de CVE-2026-44472, migración `site.0041`) | El campo nace en `merge_disabled`, así que `confirmAccount` **deja de asociar** a la cuenta los pedidos y gift cards hechos como invitado. Antes lo hacía siempre — que era justo el CVE. | **No.** El storefront no usa `confirmAccount` en ninguna parte: la auth de clientes es la Fase 4. **Pero cuando la Fase 4 llegue, el default habrá cambiado en silencio.** Ver el ítem del backlog y el ruling de Fable en la bitácora del 2026-08-24. |
+| **Desempate de cursores** (`saleor/graphql/utils/sorting.py`) | Los cursores de paginación ganan un componente `pk`. Los cursores emitidos **antes** del deploy se rechazan con `Received cursor is invalid.` | **No.** Verificado: el storefront pasa `after: null` y solo usa `endCursor` dentro de la misma sesión (`app/pages/categoria/[slug].vue:69`, `all.vue:64`). No persiste cursores en URL ni en `localStorage`. |
+| **Filtros de atributos** | `products`/`pages` dejan de matchear valores de atributos **desasignados** del product type. Un filtro que devolvía N productos puede devolver menos. | **No.** El storefront no filtra por atributos: sus dos queries (`products.graphql`, `categories.graphql`) no usan `attributes:`. |
+
+⚠️ El default de `account_confirm_merge_mode` lo calcula la migración `0041` **en tiempo
+de migración**, a partir de `settings.ACCOUNT_CONFIRM_ASSOCIATE_ANONYMOUS_OBJECTS`. Sobre
+una instancia ya migrada, cambiar ese setting es un **no-op**: el único mecanismo que
+funciona es la mutación `shopSettingsUpdate(accountConfirmMergeMode: ...)`.
 
 ---
 
@@ -160,8 +182,8 @@ Ninguno.
 Esto es lo que hace manejable cada actualización, y conviene volver a medirlo antes de
 cada upgrade (`git diff --numstat <tag-base> stable/3.22`):
 
-**Medición del 2026-08-22, contra `3.22.48`: 37 commits propios, de los cuales solo
-20 líneas tocan código de Saleor.**
+**Remedición del 2026-08-24, contra `3.22.67` (tras el sync): la divergencia NO creció.
+Siguen siendo ~20 líneas de código de Saleor, exactamente las mismas.**
 
 | Archivo | Líneas | Qué es |
 |---|---|---|
@@ -171,6 +193,12 @@ cada upgrade (`git diff --numstat <tag-base> stable/3.22`):
 | `pyproject.toml` | +1 | `python-dotenv` como dependencia directa |
 | `saleor/discount/migrations/0052_drop_sales_constraints.py` | +7 −3 | fix PostgreSQL 15+ |
 | `uv.lock` | +2 | consecuencia de la anterior |
+| `Dockerfile` | +16 −2 | `netcat-openbsd` + `ENTRYPOINT` de Railway |
+
+Que la divergencia **no crezca** tras absorber 19 parches es el dato que importa: es lo
+que mantiene viva la estrategia A (re-fork limpio) para el salto a 3.23. Medido con
+`git diff --stat 3.22.67 stable/3.22 -- . ':!.github' ':!AGENTS.md'` — todo lo demás son
+archivos que upstream no tiene.
 
 Todo lo demás son **archivos que upstream no tiene** —`railway.json`,
 `scripts/railway-entrypoint.sh`, `scripts/wait-for-db.sh`, este archivo, nuestros tres
@@ -186,7 +214,7 @@ GraphQL**, no en este fork.
 | Archivo | Por qué | Cómo se resuelve |
 |---|---|---|
 | `AGENTS.md` | Reemplazamos el de upstream entero | **Automático** vía `merge=ours` en `.gitattributes` — requiere `git config merge.ours.driver true` (ver abajo) |
-| `uv.lock` | Upstream lo marca `-merge`: siempre conflictúa, a propósito | **Regenerar**, no resolver: `uv tool run uv@0.8.14 lock` |
+| `uv.lock` | Upstream lo marca `-merge`: siempre conflictúa, a propósito | **Regenerar**, no resolver, y **partiendo del lock de upstream** (`git checkout <tag> -- uv.lock`) para heredar sus versiones: `uv tool run uv@<version-que-pinea-el-Dockerfile> lock` |
 | `0052_drop_sales_constraints.py` | Único cambio nuestro con lógica propia | **Revisar a mano** si upstream tocó esa migración. Es el único que merece atención real |
 
 ---
