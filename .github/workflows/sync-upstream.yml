@@ -7,6 +7,24 @@ name: Sync with Saleor upstream
 # siquiera lo listaba (`gh workflow list` no lo mostraba y la API respondía
 # "not found on the default branch"). Cuatro meses sin sincronizar y sin ningún aviso.
 # Si alguien vuelve a poner `main` por defecto, esto se apaga en silencio otra vez.
+#
+# ⚠️ Los PR que abre este workflow NO reciben checks por sí solos. Se abren con
+# `secrets.GITHUB_TOKEN`, y GitHub tiene una salvaguarda antibucle documentada: los
+# eventos originados por ese token no crean ejecuciones de workflow, con la única
+# excepción explícita de `workflow_dispatch` y `repository_dispatch`. Medido el
+# 2026-08-27 sobre el PR #3 (`sync/upstream-3.22.67`): llegó a revisión humana con CERO
+# checks, sus seis CheckRuns eran todos `SKIPPED` y con timestamp del `closed` al
+# mergear, no de la apertura. Ese sync traía dos CVE. Un PR sin checks no se lee como
+# "no se verificó": se lee como "todo bien".
+#
+# De ahí las dos piezas que el job `sync` añade al final:
+#   1. **Puerta rápida en línea** (techo 10 min, cero tests) dentro del propio job, que
+#      es el único sitio donde se puede verificar algo sin depender de un trigger. Su
+#      resultado se escribe en el cuerpo del PR y decide el draft y el título.
+#   2. **Dispatch explícito de `ci-fork.yml`** (`alcance: completo`) sobre la rama de
+#      sync, con la URL del run enlazada en el cuerpo. `workflow_dispatch` es la única
+#      vía que la salvaguarda deja abierta.
+# Con conflictos no se corre NADA: ver la explicación en el paso `Puerta rápida`.
 
 on:
   schedule:
@@ -24,6 +42,25 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+
+    # El servicio Postgres existe SOLO para la puerta rápida: `manage.py check` y
+    # `makemigrations --check` necesitan una base alcanzable. Se declara con `ports:`
+    # (y no con el hostname `postgres`, como hace `tests-and-linters.yml`) porque este
+    # job NO corre dentro de un contenedor: la red de alias de servicios solo existe
+    # para jobs con `container:`. Sin contenedor, el servicio se publica en el host.
+    services:
+      postgres:
+        image: library/postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: saleor
+          POSTGRES_USER: saleor
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - uses: actions/checkout@v4
@@ -64,16 +101,21 @@ jobs:
           EXISTING=$(gh pr list --head "sync/upstream-${{ steps.upstream_tag.outputs.tag }}" --json number -q '.[0].number')
           echo "pr_number=$EXISTING" >> $GITHUB_OUTPUT
 
-      - name: Create sync branch and PR
+      # ── 1. Merge ────────────────────────────────────────────────────────────
+      # Este paso ya NO empuja ni abre el PR: solo deja la rama commiteada en local y
+      # publica como SALIDAS lo que los pasos siguientes necesitan decidir. Antes
+      # `CONFLICTED` era una variable de shell que moría con el proceso, y por eso todo
+      # tenía que pasar en un único `run:` gigante.
+      - name: Merge del tag de upstream
+        id: merge
         if: steps.check_pr.outputs.pr_number == ''
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}   # ver nota en el paso anterior
           TAG: ${{ steps.upstream_tag.outputs.tag }}
         run: |
           set -uo pipefail
 
           BRANCH="sync/upstream-$TAG"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -120,30 +162,223 @@ jobs:
           CONFLICTED=$(git diff --name-only --diff-filter=U | sed 's/^/- `/;s/$/`/')
           git add -A
 
+          # La lista de conflictos es multilínea. Va a un archivo del runner en vez de a
+          # `$GITHUB_OUTPUT` a propósito: los pasos siguientes viven en el mismo job y
+          # por tanto en el mismo filesystem, y un archivo no necesita el baile de
+          # delimitadores heredoc ni puede ser inyectado por un nombre de archivo raro.
+          printf '%s\n' "$CONFLICTED" > /tmp/conflictos.txt
+
           # Si el tag ya era ancestro —o lo único que traía eran workflows—, el merge no
           # aporta nada y no hay PR que abrir. Sin este corte, cada lunes sin novedades
-          # se empuja una rama vacía y el job falla.
+          # se empuja una rama vacía y el job falla. Antes esto era un `exit 0`; ahora es
+          # una salida, porque hay pasos posteriores que también deben saltarse.
           if git diff --cached --quiet "$BASE_SHA"; then
             echo "El fork ya contiene $TAG (descontando .github/workflows/) — nada que sincronizar."
+            echo "hay_cambios=false" >> "$GITHUB_OUTPUT"
+            echo "conflictos=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          echo "hay_cambios=true" >> "$GITHUB_OUTPUT"
+
           if [ -n "$CONFLICTED" ]; then
+            echo "conflictos=true" >> "$GITHUB_OUTPUT"
             git commit -m "merge: upstream $TAG — CONFLICTOS SIN RESOLVER"
           else
+            echo "conflictos=false" >> "$GITHUB_OUTPUT"
             git commit -m "merge: upstream $TAG"
           fi
 
+      # ── 2. Puerta rápida ────────────────────────────────────────────────────
+      # Solo si el merge trajo algo Y salió limpio. Con conflictos NO se corre nada:
+      # un `.py` con marcadores `<<<<<<<` no es Python válido, así que `ruff` explota y
+      # `pytest` ni colecciona. Ese rojo no informa de nada —está garantizado de
+      # antemano— y un rojo garantizado enseña a ignorar el rojo. Ese caso además se
+      # auto-repara: cuando el humano resuelve y pushea, el push es SUYO y dispara
+      # `ci-fork.yml` nativamente por el trigger `pull_request`.
+      #
+      # Python se instala con `setup-python` y NO con `container: python:3.12` (que es
+      # como lo hace `tests-and-linters.yml`) por una razón concreta: dentro de un
+      # contenedor los binarios son los de la imagen, y `python:3.12` no trae `gh`. Los
+      # pasos de este job dependen de `gh` (`pr list`, `workflow run`, `run list`,
+      # `pr create`), así que meter el job en un contenedor los rompería todos. El
+      # runner pelado ya trae `git` y `gh`, y `setup-python` añade lo único que falta.
+      # `libpq-dev` tampoco hace falta: el proyecto usa `psycopg[binary]`, que trae la
+      # libpq compilada en la rueda (pyproject.toml:76).
+      - name: Instalar Python 3.12
+        if: steps.merge.outputs.hay_cambios == 'true' && steps.merge.outputs.conflictos == 'false'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.0.0
+        if: steps.merge.outputs.hay_cambios == 'true' && steps.merge.outputs.conflictos == 'false'
+        with:
+          enable-cache: true
+
+      - name: Puerta rápida (sin tests, techo 10 min)
+        id: puerta
+        if: steps.merge.outputs.hay_cambios == 'true' && steps.merge.outputs.conflictos == 'false'
+        timeout-minutes: 10
+        env:
+          DATABASE_URL: "postgres://saleor:saleor@localhost:5432/saleor"
+          # No hay servicio de Redis/Valkey en este job, y es a propósito: se midió el
+          # 2026-08-27 que ni `manage.py check` ni `makemigrations --check` abren la
+          # conexión de caché (se comprobó apuntando CACHE_URL a un puerto muerto: ambos
+          # exit 0). La variable existe solo para que los settings de Django parseen.
+          CACHE_URL: "redis://localhost:6379/0"
+          SECRET_KEY: ci-sync-upstream
+        run: |
+          set -uo pipefail
+
+          # El paso NO debe abortar el job: un sync que no se puede verificar sigue
+          # mereciendo un PR — lo que no merece es parecer verde. El resultado sale por
+          # `outputs` y lo consume el paso que arma el cuerpo del PR.
+          RESULTADO=ok
+          COMANDO=""
+
+          ejecutar() {
+            echo "::group::$*"
+            if "$@"; then
+              echo "::endgroup::"
+              return 0
+            fi
+            echo "::endgroup::"
+            echo "❌ Falló: $*"
+            RESULTADO=fallo
+            COMANDO="$*"
+            return 1
+          }
+
+          # Encadenado con `&&`: para en el primero que falle, como pide el contrato.
+          ejecutar uv sync --locked \
+            && ejecutar uv run python -c "import saleor" \
+            && ejecutar uv run ruff check . \
+            && ejecutar uv run python manage.py check \
+            && ejecutar uv run python manage.py makemigrations --check --dry-run \
+            || true
+
+          {
+            echo "resultado=$RESULTADO"
+            echo "comando=$COMANDO"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Puerta rápida: $RESULTADO ${COMANDO:+(falló: $COMANDO)}"
+          exit 0
+
+      # ── 3. Push ─────────────────────────────────────────────────────────────
+      - name: Empujar la rama de sync
+        id: push
+        if: steps.merge.outputs.hay_cambios == 'true'
+        env:
+          BRANCH: ${{ steps.merge.outputs.branch }}
+        run: |
+          set -uo pipefail
           git push origin "$BRANCH" --force
+
+      # ── 4. Disparar la suite completa ───────────────────────────────────────
+      # `workflow_dispatch` es la ÚNICA vía por la que esta rama recibe CI: los eventos
+      # originados por `secrets.GITHUB_TOKEN` no crean ejecuciones de workflow
+      # (salvaguarda antibucle de GitHub), y las dos excepciones documentadas son
+      # `workflow_dispatch` y `repository_dispatch`. Sin este paso, el `push` de arriba
+      # y el `gh pr create` de abajo no disparan absolutamente nada — que es justo lo
+      # que pasó con el PR #3 (`sync/upstream-3.22.67`): cero checks, seis CheckRuns
+      # `SKIPPED`, y dos CVE dentro.
+      - name: Disparar la suite completa (ci-fork.yml)
+        id: suite
+        if: steps.merge.outputs.hay_cambios == 'true' && steps.merge.outputs.conflictos == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}   # ver nota en el paso `Check if PR already exists`
+          BRANCH: ${{ steps.merge.outputs.branch }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+
+          # Enlace de respaldo: la pestaña Actions filtrada por esta rama. El `/` del
+          # nombre de rama tiene que ir percent-encoded o el filtro no aplica.
+          BRANCH_ENC=$(printf '%s' "$BRANCH" | sed 's#/#%2F#g')
+          FALLBACK="$SERVER_URL/$REPO/actions?query=branch%3A$BRANCH_ENC"
+
+          if ! gh workflow run ci-fork.yml --ref "$BRANCH" -f alcance=completo; then
+            echo "⚠️ No se pudo disparar ci-fork.yml sobre $BRANCH."
+            {
+              echo "run_url=$FALLBACK"
+              echo "run_encontrado=false"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # `gh workflow run` NO devuelve el id del run: la API de dispatch responde 204
+          # sin cuerpo. Hay que sondear la lista de runs, porque el run tarda unos
+          # segundos en materializarse. Si no aparece, esto NO falla el job — el PR se
+          # abre igual, con el enlace genérico y diciéndolo.
+          RUN_URL=""
+          for INTENTO in 1 2 3 4 5; do
+            sleep 6
+            RUN_URL=$(gh run list --workflow ci-fork.yml --branch "$BRANCH" \
+                        --json databaseId,url --limit 1 -q '.[0].url' 2>/dev/null || true)
+            if [ -n "$RUN_URL" ]; then
+              echo "Run encontrado en el intento $INTENTO: $RUN_URL"
+              break
+            fi
+            echo "Intento $INTENTO: el run aún no aparece."
+          done
+
+          if [ -n "$RUN_URL" ]; then
+            {
+              echo "run_url=$RUN_URL"
+              echo "run_encontrado=true"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "⚠️ El run se disparó pero no apareció en la lista tras 5 intentos."
+            {
+              echo "run_url=$FALLBACK"
+              echo "run_encontrado=false"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── 5. Abrir el PR ──────────────────────────────────────────────────────
+      # El estado de verificación va PRIMERO en el cuerpo, antes que cualquier otra
+      # cosa: es lo único que un revisor no puede deducir mirando el PR, porque este
+      # PR nunca va a tener checks propios (ver la nota al pie del cuerpo).
+      - name: Abrir el PR
+        if: steps.merge.outputs.hay_cambios == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}   # ver nota en el paso `Check if PR already exists`
+          TAG: ${{ steps.upstream_tag.outputs.tag }}
+          BRANCH: ${{ steps.merge.outputs.branch }}
+          CONFLICTOS: ${{ steps.merge.outputs.conflictos }}
+          PUERTA: ${{ steps.puerta.outputs.resultado }}
+          PUERTA_COMANDO: ${{ steps.puerta.outputs.comando }}
+          SUITE_URL: ${{ steps.suite.outputs.run_url }}
+          SUITE_ENCONTRADO: ${{ steps.suite.outputs.run_encontrado }}
+        run: |
+          set -uo pipefail
+
+          CONFLICTED=$(cat /tmp/conflictos.txt 2>/dev/null || true)
 
           {
             echo "Sync automático con \`saleor/saleor@$TAG\`."
             echo
-            if [ -n "$CONFLICTED" ]; then
-              echo "## ⚠️ Este PR tiene conflictos SIN RESOLVER"
+
+            if [ "$CONFLICTOS" = "true" ]; then
+              echo "## ⚠️ Árbol NO verificable — no se corrió nada"
               echo
               echo "Los marcadores de conflicto **están commiteados** en la rama, a propósito:"
               echo "es la única forma de que el conflicto sea revisable. **No mergear así.**"
+              echo
+              echo "**Por qué no se corrió ninguna verificación:** un \`.py\` con marcadores"
+              echo "\`<<<<<<<\` no es Python válido. \`pytest\` no colecciona y \`ruff\` explota."
+              echo "Correr algo sobre este árbol no produce información: produce rojo garantizado,"
+              echo "y un rojo garantizado enseña a ignorar el rojo."
+              echo
+              echo "**Esto se auto-repara.** Cuando resuelvas los conflictos y hagas push sobre"
+              echo "\`$BRANCH\`, ese push es **tuyo**, no del \`GITHUB_TOKEN\`, así que dispara"
+              echo "\`ci-fork.yml\` de forma nativa por su trigger \`pull_request\`. El CI arranca"
+              echo "solo — no hay que lanzarlo a mano."
               echo
               echo "Archivos en conflicto:"
               echo
@@ -151,22 +386,103 @@ jobs:
               echo
               echo "Resolver sobre \`$BRANCH\`, commitear, y recién ahí sacar el PR de draft."
               echo
+
+            elif [ "$PUERTA" = "ok" ]; then
+              echo "## ✅ Puerta rápida: OK"
+              echo
+              echo "El merge salió limpio y la puerta rápida pasó, en el mismo job que abrió"
+              echo "este PR. Qué comprobó exactamente:"
+              echo
+              echo "1. \`uv sync --locked\` — el lockfile resuelve y el entorno se instala."
+              echo "2. \`uv run python -c \"import saleor\"\` — el paquete importa (un rename de"
+              echo "   upstream que rompa un import aparece aquí)."
+              echo "3. \`uv run ruff check .\` — linter."
+              echo "4. \`uv run python manage.py check\` — checks de sistema de Django."
+              echo "5. \`uv run python manage.py makemigrations --check --dry-run\` — no faltan"
+              echo "   migraciones."
+              echo
+              echo "La puerta **no corre tests** y tiene techo de 10 minutos: descarta lo que"
+              echo "rompe de forma obvia, no da por buena la sincronización."
+              echo
+              echo "### Suite completa"
+              echo
+              if [ "$SUITE_ENCONTRADO" = "true" ]; then
+                echo "Se disparó \`ci-fork.yml\` (\`alcance: completo\`) sobre \`$BRANCH\`:"
+                echo
+                echo "$SUITE_URL"
+              else
+                echo "Se intentó disparar \`ci-fork.yml\` (\`alcance: completo\`) sobre \`$BRANCH\`,"
+                echo "pero **no se pudo capturar la URL del run** (la API de dispatch responde 204"
+                echo "sin cuerpo y el run no apareció en la lista a tiempo). Buscarlo aquí:"
+                echo
+                echo "$SUITE_URL"
+              fi
+              echo
+              echo "⚠️ **Esa suite estaba corriendo cuando se abrió este PR.** Su resultado no está"
+              echo "reflejado ni aquí ni en los checks del PR: hay que abrir el enlace y mirarlo."
+              echo "No asumirlo."
+              echo
+
+            else
+              echo "## ❌ Puerta rápida: FALLÓ"
+              echo
+              echo "**No mergear.**"
+              echo
+              echo "Comando que falló:"
+              echo
+              echo '```'
+              echo "${PUERTA_COMANDO:-(desconocido — la puerta no reportó comando)}"
+              echo '```'
+              echo
+              echo "El log completo está en el job \`sync\` del run que abrió este PR."
+              echo
+              echo "### Suite completa"
+              echo
+              if [ "$SUITE_ENCONTRADO" = "true" ]; then
+                echo "Se disparó igualmente \`ci-fork.yml\` (\`alcance: completo\`) sobre \`$BRANCH\`,"
+                echo "para tener el panorama entero y no solo el primer fallo:"
+                echo
+                echo "$SUITE_URL"
+              else
+                echo "Se intentó disparar \`ci-fork.yml\` (\`alcance: completo\`) sobre \`$BRANCH\`,"
+                echo "pero **no se pudo capturar la URL del run**. Buscarlo aquí:"
+                echo
+                echo "$SUITE_URL"
+              fi
+              echo
             fi
+
             echo "## Antes de mergear"
             echo
             echo "1. Revisar \`UPGRADE_NOTES.md\` — ahí está todo lo que este fork cambió"
             echo "   respecto a upstream, que es donde aparecen los conflictos."
             echo "2. Correr las migraciones contra una copia de la BD, no solo la suite."
             echo "3. Verificar que el esquema GraphQL no rompa el codegen del storefront."
+            echo
+            echo "---"
+            echo
+            echo "**Por qué la verificación viene en el cuerpo y no como checks de este PR:**"
+            echo "este PR lo abre \`sync-upstream.yml\` con \`secrets.GITHUB_TOKEN\`, y GitHub"
+            echo "tiene una salvaguarda antibucle documentada: los eventos disparados por ese"
+            echo "token **no crean ejecuciones de workflow**, con la excepción explícita de"
+            echo "\`workflow_dispatch\` y \`repository_dispatch\`. Por eso el PR #3"
+            echo "(\`sync/upstream-3.22.67\`) llegó a revisión humana con **cero** checks —sus"
+            echo "seis CheckRuns eran todos \`SKIPPED\`— pese a traer dos CVE. Un PR sin checks"
+            echo "no se lee como «no se verificó»: se lee como «todo bien». Este bloque existe"
+            echo "para que eso no vuelva a pasar."
           } > /tmp/pr-body.md
 
-          # Draft cuando hay conflictos: impide que un merge accidental meta marcadores
-          # de conflicto en `stable/3.22`.
+          # Draft en los dos casos en que el árbol no está sano:
+          #   - conflictos: impide que un merge accidental meta marcadores en `stable/3.22`.
+          #   - puerta en rojo: el sync no pasa ni lo mínimo; que no parezca mergeable.
           DRAFT=""
           TITLE="chore: sync upstream Saleor $TAG"
-          if [ -n "$CONFLICTED" ]; then
+          if [ "$CONFLICTOS" = "true" ]; then
             DRAFT="--draft"
             TITLE="chore: sync upstream Saleor $TAG — ⚠️ CON CONFLICTOS"
+          elif [ "$PUERTA" != "ok" ]; then
+            DRAFT="--draft"
+            TITLE="chore: sync upstream Saleor $TAG — ❌ PUERTA EN ROJO"
           fi
 
           gh pr create \
