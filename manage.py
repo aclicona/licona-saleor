@@ -4,6 +4,7 @@ import sys
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
+
     load_dotenv()
 
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "saleor.settings")

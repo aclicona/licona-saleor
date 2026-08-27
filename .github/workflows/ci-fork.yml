@@ -1,0 +1,194 @@
+# CI propia del fork (aclicona/licona-saleor). NO existe en el repo upstream de Saleor.
+#
+# Por que un archivo nuevo y no un arreglo de `tests-and-linters.yml`:
+#   1. Ese workflow esta en `state: deleted` en la API de Actions de GitHub para este
+#      fork: el archivo existe en `stable/3.22`, pero GitHub no lo tiene registrado, no
+#      corre nunca y `gh workflow run` contra el falla.
+#   2. Ademas es un archivo de upstream. Tocarlo paga deuda de merge en cada sync 3.22.x.
+#      Un archivo con nombre propio (`ci-fork.yml`) tiene cero conflictos por definicion.
+#
+# Por que hay `workflow_dispatch`: los PR que abre `sync-upstream.yml` usan
+# `secrets.GITHUB_TOKEN`, y GitHub no dispara workflows con eventos originados por ese
+# token (salvaguarda antibucle). Las unicas excepciones documentadas son
+# `workflow_dispatch` y `repository_dispatch`. Por tanto el dispatch manual es la UNICA
+# via por la que la rama de sync puede recibir CI.
+
+name: CI del fork
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [ 'stable/*' ]
+  workflow_dispatch:
+    inputs:
+      alcance:
+        description: 'completo = puerta + linters + suite | rapido = solo la puerta'
+        type: choice
+        options: [completo, rapido]
+        default: completo
+
+env:
+  CACHE_URL: "redis://cache:6379/0"
+  DATABASE_URL: "postgres://saleor:saleor@postgres:5432/saleor"
+  SECRET_KEY: ci-test
+
+# Agrupa por workflow + PR (o ref, cuando no hay PR). Un push nuevo cancela el anterior.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Puerta rapida: lo que un parche 3.22.x rompe de verdad contra los ~19 parches
+  # locales del fork -- un import roto por un rename upstream, una migracion que
+  # falta, deriva de configuracion. Corre SIEMPRE, tambien en `alcance: rapido`.
+  # ---------------------------------------------------------------------------
+  puerta:
+    name: Puerta rapida
+    runs-on: ubuntu-latest
+    container: python:3.12
+    timeout-minutes: 15
+
+    services:
+      # `manage.py makemigrations --check` necesita una base alcanzable.
+      postgres:
+        image: library/postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: saleor
+          POSTGRES_USER: saleor
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Instalar dependencias de sistema
+        run: |
+          apt-get install -y libpq-dev
+
+      - uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.0.0
+        with:
+          enable-cache: true
+
+      - name: Sincronizar el entorno (uv sync --locked)
+        run: uv sync --locked
+
+      - name: El proyecto importa
+        run: uv run python -c "import saleor"
+
+      - name: Ruff
+        run: uv run ruff check .
+
+      - name: Django system check
+        run: uv run python manage.py check
+
+      - name: No faltan migraciones
+        run: uv run python manage.py makemigrations --check --dry-run
+
+  # ---------------------------------------------------------------------------
+  # Linters completos via pre-commit. Se salta cuando el dispatch pidio `rapido`.
+  #
+  # Sobre la condicion: en un evento `pull_request` el contexto `inputs` esta vacio,
+  # asi que `inputs.alcance` es la cadena vacia y `inputs.alcance != 'rapido'` ya
+  # daria true. Aun asi se antepone `github.event_name != 'workflow_dispatch'`: la
+  # or corta antes de mirar `inputs` en todo evento que no sea dispatch, de modo que
+  # el comportamiento en PR no depende de como GitHub decida poblar (o no) `inputs`
+  # en eventos donde ese contexto no aplica. En PR corren los tres jobs.
+  # ---------------------------------------------------------------------------
+  linters:
+    name: Linters (pre-commit)
+    runs-on: ubuntu-latest
+    container: python:3.12
+    timeout-minutes: 20
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido' }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Instalar dependencias de sistema
+        run: |
+          apt-get install -y libpq-dev
+
+      - uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.0.0
+        with:
+          enable-cache: true
+
+      - name: Sincronizar el entorno (uv sync --locked)
+        run: uv sync --locked
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: ${{ runner.os }}-pre-commit-${{ hashFiles('**/.pre-commit-config.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pre-commit-
+
+      # `git config safe.directory` es el workaround de
+      # https://github.com/actions/runner-images/issues/6775 (checkout dentro de contenedor).
+      - name: Correr linters y checks
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          uv run pre-commit run --all --show-diff-on-failure
+
+  # ---------------------------------------------------------------------------
+  # Suite completa. Sin cobertura: el fork no la sube a ningun servicio externo (no
+  # tiene el secreto que haria falta) y quitarla ahorra minutos de runner.
+  # Misma condicion que `linters`.
+  # ---------------------------------------------------------------------------
+  suite:
+    name: Suite completa (17k tests)
+    runs-on: ubuntu-latest
+    container: python:3.12
+    timeout-minutes: 60
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido' }}
+
+    services:
+      postgres:
+        image: library/postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: saleor
+          POSTGRES_USER: saleor
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      cache:
+        image: valkey/valkey:8.1-alpine
+        options: >-
+          --health-cmd "valkey-cli ping | grep PONG"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Instalar dependencias de sistema
+        run: |
+          apt-get install -y libpq-dev
+
+      - uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.0.0
+        with:
+          enable-cache: true
+
+      - name: Sincronizar el entorno (uv sync --locked)
+        run: uv sync --locked
+
+      - name: Correr la suite (sin e2e)
+        run: |
+          uv run pytest \
+            -m "not e2e" \
+            -n logical \
+            --junitxml=junit/test-results.xml \
+            -o junit_family=legacy
+
+      - name: Publicar resultados JUnit
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: resultados-pytest
+          path: junit/test-results.xml

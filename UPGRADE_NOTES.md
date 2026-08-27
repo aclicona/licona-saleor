@@ -135,6 +135,93 @@ el lock. Upstream no usa `python-dotenv`, por lo que nunca va a añadir la líne
 
 ---
 
+### 2026-08-27 — CI propia del fork y verificación de los PR de sync (base: 3.22.67)
+
+**Archivos añadidos:**
+
+- `.github/workflows/ci-fork.yml` — **nuevo, sin equivalente en upstream.** Tres jobs: `puerta`
+  (import + ruff + `manage.py check` + `makemigrations --check`, techo 15 min), `linters`
+  (`pre-commit run --all`, techo 20 min) y `suite` (la suite completa sin e2e, techo 60 min).
+  Dispara con `pull_request` sobre `stable/*` y con `workflow_dispatch` (input `alcance`:
+  `completo` | `rapido`).
+
+**Archivos modificados:**
+
+- `.github/workflows/sync-upstream.yml` — el job `sync` pasa de un `run:` monolítico a cinco pasos
+  con `id`. Añade una **puerta rápida en línea** (techo 10 min, sin tests) cuando el merge sale sin
+  conflictos, dispara `ci-fork.yml` sobre la rama de sync, y **reescribe el cuerpo del PR** para que
+  el estado de verificación sea lo primero que se lee. El job `check-new-minor` **no se tocó**
+  (verificado por diff de bloque: 117 líneas idénticas antes y después).
+- `manage.py` — **una línea en blanco** tras `from dotenv import load_dotenv`, que es lo que pide
+  `ruff-format`. Ver el motivo abajo.
+
+**Motivo — por qué existe un `ci-fork.yml` en vez de arreglar `tests-and-linters.yml`:**
+
+Medido el 2026-08-27 contra la API de Actions de GitHub, no supuesto:
+
+```
+gh api repos/aclicona/licona-saleor/actions/workflows/tests-and-linters.yml -q .state
+→ deleted
+```
+
+Lo mismo para `check-licenses.yaml` y `check-migration-tasks.yml`. Los tres archivos **existen** en
+`stable/3.22`, que es la rama por defecto, y aun así GitHub los tiene por borrados: el registro de
+Actions del fork heredó el borrado que upstream hizo en `ec664a1d32` (*fix(build): always run
+linters + add `sfw`*, #19573), un commit que solo vive en ramas de upstream. Consecuencia medida:
+`gh run list --workflow tests-and-linters.yml` devuelve **vacío** — la suite de este fork **no ha
+corrido ni una sola vez** desde que se creó en abril de 2026.
+
+Aun sin ese problema, tocar `tests-and-linters.yml` sería un error: es un archivo de upstream, y
+`sync-upstream.yml` descarta a propósito todo `.github/workflows/` que venga de upstream (porque el
+`GITHUB_TOKEN` tiene prohibido empujar cambios ahí). Un archivo con nombre propio tiene **cero
+conflictos de merge por definición**.
+
+**Motivo — por qué el PR de sync necesita verificación dentro de su propio job:**
+
+GitHub no dispara workflows con eventos originados por `secrets.GITHUB_TOKEN` (salvaguarda antibucle
+documentada; las únicas excepciones son `workflow_dispatch` y `repository_dispatch`). El PR #3
+(`sync/upstream-3.22.67`) llegó a revisión humana con **cero** checks: sus seis CheckRuns son todos
+`SKIPPED` y con timestamp del evento `closed` al mergear, no de la apertura. Ese sync traía dos CVE.
+
+Se descartó la alternativa del PAT: una credencial de larga vida que caduca en silencio reproduce
+exactamente el fallo que se está arreglando —algo que deja de verificar sin avisar— y sería un punto
+único de fallo en la cadena de suministro de **todas** las instancias de cliente a la vez.
+
+**Motivo — la línea en blanco de `manage.py`:**
+
+`pre-commit run --all` sobre `stable/3.22` limpio da **`ruff format` en Failed, 1 archivo
+reformateado**: `manage.py`, que es un parche local del fork (el `load_dotenv` del 2026-04-29). El
+resto está verde. El
+parche entró sin pasar por el formateador del propio fork **porque ese formateador nunca ha corrido**,
+que es justo lo que arregla este cambio. Tomar el reformateo es lo que evita que `ci-fork.yml` nazca
+en rojo por una razón que no tiene nada que ver con lo que vigila.
+
+**Verificación (2026-08-27, sobre `stable/3.22`):**
+
+- `pre-commit run --all` tras el reformateo → **los diez hooks en verde, exit 0**:
+  `trailing-whitespace`, `end-of-file-fixer`, `ruff`, `ruff-format`, `mypy`, `deptry`, `semgrep`,
+  `uv-lock`, `Check for uncreated migrations` y `Check GraphQL schema is up to date`.
+  ⚠️ En la corrida **anterior** al reformateo, `semgrep` salió `Failed — files were modified by this
+  hook`. Es un **falso positivo por cascada**: pre-commit le atribuyó la modificación que había dejado
+  `ruff-format`. Con el árbol formateado pasa. No perseguirlo.
+
+- `.venv/bin/ruff check .` → `All checks passed!`
+- `.venv/bin/python manage.py check` → `System check identified no issues (0 silenced).`
+- `.venv/bin/python manage.py makemigrations --check --dry-run` → `No changes detected`, exit 0
+- `python -c "import saleor"` → OK, `3.22.67`
+- Los cuatro son exactamente los comandos de la puerta rápida, así que la línea base de la puerta
+  está medida antes de existir.
+- Se comprobó además, apuntando `CACHE_URL` a un puerto muerto, que **la puerta no necesita Redis**:
+  `manage.py check` y `makemigrations --check` salen 0 igual. Por eso el job `sync` declara solo
+  Postgres.
+
+**Conflicto potencial al actualizar upstream:** **ninguno.** `ci-fork.yml` y `sync-upstream.yml` no
+existen en upstream, y el propio `sync-upstream.yml` descarta todo `.github/workflows/` que llegue
+del merge. La línea en blanco de `manage.py` sí puede conflictuar, pero `manage.py` ya era un archivo
+con parche local y ya estaba en la lista de conflictos previsibles.
+
+---
+
 ## Pendiente de upstream
 
 | Tema | Estado a fecha 3.22.67 |
