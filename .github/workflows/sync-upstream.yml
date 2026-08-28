@@ -39,9 +39,25 @@ jobs:
   # humana planificada, no un PR automático. De eso avisa el job `check-new-minor`.
   sync:
     runs-on: ubuntu-latest
+    # Techo de JOB, no solo del paso `puerta`. Sin esto el default de Actions son SEIS
+    # HORAS: un cron desatendido de los lunes que se cuelgue en `git fetch`, `git push`
+    # o cualquier llamada a `gh` —ninguno tenia techo propio— se queda ahi consumiendo
+    # runner en vez de fallar rapido y visible.
+    timeout-minutes: 30
     permissions:
       contents: write
       pull-requests: write
+      # `actions: write` NO es opcional y su ausencia falla EN SILENCIO. Un bloque
+      # `permissions:` explicito pone en `none` todo lo que no enumera, y el paso
+      # "Disparar la suite completa" llama a
+      #   POST /repos/{owner}/{repo}/actions/workflows/{id}/dispatches
+      # (via `gh workflow run`), que exige ese scope. Sin el, la llamada devuelve 403,
+      # el paso cae por su rama de respaldo —esta escrita para no romper el job— y el
+      # PR sale con el enlace generico a la pestana de Actions en vez del run real.
+      # Es decir: la suite no correria nunca y el PR pareceria estar bien. Que es
+      # exactamente el modo de fallo que este workflow existe para eliminar.
+      # Cubre tambien el `gh run list` con el que se sondea la URL del run.
+      actions: write
 
     # El servicio Postgres existe SOLO para la puerta rápida: `manage.py check` y
     # `makemigrations --check` necesitan una base alcanzable. Se declara con `ports:`
@@ -97,8 +113,18 @@ jobs:
           # El mismo síntoma delató el problema en local: `gh run list` respondió con
           # una URL `api.github.com/repos/saleor/saleor/...`.
           GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.upstream_tag.outputs.tag }}
         run: |
-          EXISTING=$(gh pr list --head "sync/upstream-${{ steps.upstream_tag.outputs.tag }}" --json number -q '.[0].number')
+          # `$TAG` viene por `env:`, no interpolado con la sintaxis de expresiones de
+          # Actions dentro del shell. OJO: esa sintaxis se expande ANTES de que el shell
+          # vea nada, tambien dentro de comentarios como este — por eso aqui se describe
+          # con palabras y no se escribe literal. Era la UNICA
+          # interpolacion directa del archivo; el resto de pasos ya pasaban el tag por
+          # entorno. Hoy es inocuo (el tag sale de una regex `^X\.Y\.[0-9]+$` que no
+          # admite metacaracteres), pero si esa regex se afloja algun dia —para aceptar
+          # sufijos rc, por ejemplo— este seria el unico punto sin proteger, y fallaria
+          # como inyeccion de comandos, que es la forma mas silenciosa de fallar.
+          EXISTING=$(gh pr list --head "sync/upstream-$TAG" --json number -q '.[0].number')
           echo "pr_number=$EXISTING" >> $GITHUB_OUTPUT
 
       # ── 1. Merge ────────────────────────────────────────────────────────────
@@ -484,6 +510,16 @@ jobs:
             DRAFT="--draft"
             TITLE="chore: sync upstream Saleor $TAG — ❌ PUERTA EN ROJO"
           fi
+
+          # La label tiene que existir ANTES: `gh pr create --label X` falla si no esta,
+          # y falla en el ULTIMO paso — con la rama ya empujada y la suite ya disparada.
+          # El sync queda a medias y sin PR, o sea invisible para quien solo mira PRs
+          # abiertos, y se repite igual cada lunes. En un repo replicado para un cliente
+          # la label no existe de entrada, asi que crearla aqui es parte de que el
+          # workflow sea autosuficiente. `|| true`: si ya existe, no es un error.
+          gh label create "upstream-sync" \
+            --description "PR automatico de sincronizacion con upstream" \
+            --color "0E8A16" 2>/dev/null || true
 
           gh pr create \
             --title "$TITLE" \

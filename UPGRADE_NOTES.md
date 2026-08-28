@@ -165,9 +165,11 @@ gh api repos/aclicona/licona-saleor/actions/workflows/tests-and-linters.yml -q .
 ```
 
 Lo mismo para `check-licenses.yaml` y `check-migration-tasks.yml`. Los tres archivos **existen** en
-`stable/3.22`, que es la rama por defecto, y aun así GitHub los tiene por borrados: el registro de
-Actions del fork heredó el borrado que upstream hizo en `ec664a1d32` (*fix(build): always run
-linters + add `sfw`*, #19573), un commit que solo vive en ramas de upstream. Consecuencia medida:
+`stable/3.22`, que es la rama por defecto, y aun así GitHub los tiene por borrados. La explicación más
+probable —**inferencia, no medición**— es que el registro de Actions del fork heredara el borrado que
+upstream hizo en `ec664a1d32` (*fix(build): always run linters + add `sfw`*, #19573), un commit que
+solo vive en ramas de upstream. Lo medido es el `state` y el historial vacío, no la causa; para el
+arreglo la causa da igual. Consecuencia medida:
 `gh run list --workflow tests-and-linters.yml` devuelve **vacío** — la suite de este fork **no ha
 corrido ni una sola vez** desde que se creó en abril de 2026.
 
@@ -214,6 +216,28 @@ en rojo por una razón que no tiene nada que ver con lo que vigila.
 - Se comprobó además, apuntando `CACHE_URL` a un puerto muerto, que **la puerta no necesita Redis**:
   `manage.py check` y `makemigrations --check` salen 0 igual. Por eso el job `sync` declara solo
   Postgres.
+
+**Primer run real de `ci-fork.yml`** (`workflow_dispatch` sobre `stable/3.22`,
+[run 33126906393](https://github.com/aclicona/licona-saleor/actions/runs/33126906393)) — los tres jobs
+en verde:
+
+| Job | Resultado | Duración |
+|---|---|---|
+| `Puerta rapida` | `success` | 1 min 31 s |
+| `Linters (pre-commit)` | `success` | 5 min 34 s |
+| `Suite completa (17k tests)` | `success` — **17 265 passed, 2 skipped, 0 failed** | 17 min 40 s |
+
+⚠️ **Dato que corrige la línea base documentada del proyecto:** los **17 fallos "preexistentes"** que
+aparecen al correr la suite en macOS local **no existen en Linux CI**. La primera ejecución de esta
+suite en CI en toda la vida del fork sale limpia. Los 17 son un artefacto del entorno local, no una
+deuda del fork.
+
+**Permisos, explícitos en los dos workflows y a propósito.** `ci-fork.yml` declara
+`contents: read` + `actions: write` (lo exige `actions/upload-artifact`), y `sync-upstream.yml` añade
+`actions: write` al job `sync` (lo exige `gh workflow run`). Sin declararlos, el scope sale del ajuste
+de repo *Workflow permissions*, que **no está versionado** y que GitHub pone en solo lectura para los
+repos nuevos desde 2023 — o sea que un repo replicado para un cliente los rompería, y de forma
+engañosa: el job `suite` saldría rojo por el `upload-artifact`, no por los tests.
 
 **Conflicto potencial al actualizar upstream:** **ninguno.** `ci-fork.yml` y `sync-upstream.yml` no
 existen en upstream, y el propio `sync-upstream.yml` descarta todo `.github/workflows/` que llegue

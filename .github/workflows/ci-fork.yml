@@ -15,6 +15,18 @@
 
 name: CI del fork
 
+# Permisos EXPLICITOS a proposito. Sin este bloque, el scope sale del ajuste de repo
+# "Workflow permissions" (Settings -> Actions -> General), que NO esta versionado: hoy
+# vale `write` en este fork, pero GitHub pone `read` por defecto en los repos nuevos
+# desde 2023. En un repo replicado para un cliente, `actions/upload-artifact` fallaria
+# con 403 y tumbaria el job `suite` ENTERO — un run donde los 17k tests pasaron se veria
+# como suite fallida en el enlace que `sync-upstream.yml` pone en el cuerpo del PR.
+# Es el mismo modo de fallo que ya mordio al job `sync`: permiso implicito que se rompe
+# lejos y miente cerca.
+permissions:
+  contents: read
+  actions: write   # `actions/upload-artifact@v4` lo exige
+
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -39,9 +51,15 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Puerta rapida: lo que un parche 3.22.x rompe de verdad contra los ~19 parches
-  # locales del fork -- un import roto por un rename upstream, una migracion que
-  # falta, deriva de configuracion. Corre SIEMPRE, tambien en `alcance: rapido`.
+  # Puerta rapida: lo que un parche 3.22.x rompe de verdad contra los parches locales
+  # del fork -- un import roto por un rename upstream, una migracion que falta, deriva
+  # de configuracion. Corre SIEMPRE, tambien en `alcance: rapido`.
+  #
+  # Son SEIS parches locales, no diecinueve: `manage.py`, `saleor/asgi/__init__.py`,
+  # `saleor/celeryconf.py`, `pyproject.toml`, la migracion `discount/0052` y el
+  # `Dockerfile` (ver "Cuanto divergimos de upstream" en UPGRADE_NOTES.md, medido con
+  # `git diff --stat`). El 19 que aparece en `sync-upstream.yml` es otra cosa: los 19
+  # tags de parche de UPSTREAM que absorbio el sync de 3.22.48 a 3.22.67.
   # ---------------------------------------------------------------------------
   puerta:
     name: Puerta rapida
