@@ -244,6 +244,32 @@ existen en upstream, y el propio `sync-upstream.yml` descarta todo `.github/work
 del merge. La línea en blanco de `manage.py` sí puede conflictuar, pero `manage.py` ya era un archivo
 con parche local y ya estaba en la lista de conflictos previsibles.
 
+### 2026-09-01 — Guion de chequeo de migraciones (base: 3.22.67)
+
+**Archivos añadidos:**
+
+- `scripts/check-migrations.sh` — **nuevo, sin equivalente en upstream.** Responde una sola
+  pregunta —¿está la base migrada a la altura del código?— y **no muta nada**: nunca corre
+  `migrate`. Existe porque `manage.py migrate --check` es mudo (0 bytes en stdout, verde o rojo)
+  y solo habla por exit code; el guion genera el mensaje: ante pendientes lista **cuáles**
+  (vía `showmigrations --plan`) y el comando exacto para aplicarlas.
+  Contrato de salida: **0** = base al día · **1** = hay migraciones pendientes (accionable:
+  migrar) · **2** = **no se pudo responder** la pregunta (base inaccesible o inexistente,
+  Postgres apagado, entorno Python roto). **2 significa "no sé", no "está mal"**: conflarlo con 1
+  llevaría a correr `migrate` contra una base apagada.
+  Intérprete configurable con `${PYTHON:-python}` (local recibe `.venv/bin/python`; en la imagen
+  vale el del PATH). `sh` POSIX puro, como los otros dos guiones de `scripts/`.
+
+**Motivo:** vive en el fork porque la imagen del fork es el **único artefacto que viaja a todas las
+instancias de cliente**. Ahí una sola fuente sirve a sus tres llamadores —`dev.sh` en local, la
+sesión nocturna y (cuando el humano lo apruebe) el `preDeployCommand` de Railway— sin adaptarla.
+El caso que lo motiva está medido: el 2026-08-28 la API local devolvió HTTP 500 en todo GraphQL
+porque el sync a 3.22.67 trajo migraciones y nadie migró la base local.
+
+**Conflicto potencial al actualizar upstream:** **ninguno.** El archivo no existe en upstream, así
+que no hay nada del otro lado con qué chocar. En un re-fork limpio se copia con el resto de
+`scripts/`.
+
 ---
 
 ## Pendiente de upstream
@@ -312,9 +338,9 @@ que mantiene viva la estrategia A (re-fork limpio) para el salto a 3.23. Medido 
 archivos que upstream no tiene.
 
 Todo lo demás son **archivos que upstream no tiene** —`railway.json`,
-`scripts/railway-entrypoint.sh`, `scripts/wait-for-db.sh`, este archivo, nuestros tres
-workflows, `docs/superpowers/`— y **no pueden conflictuar**: no hay nada del otro lado
-con qué chocar.
+`scripts/railway-entrypoint.sh`, `scripts/wait-for-db.sh`, `scripts/check-migrations.sh`,
+este archivo, nuestros tres workflows, `docs/superpowers/`— y **no pueden conflictuar**:
+no hay nada del otro lado con qué chocar.
 
 **El producto no vive en este repo.** `storefront` y `saleor-apps` hablan con Saleor por
 GraphQL, no por sus internals. Por eso el riesgo de un upgrade está en **el esquema
