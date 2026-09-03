@@ -28,6 +28,19 @@ permissions:
   actions: write   # `actions/upload-artifact@v4` lo exige
 
 on:
+  # `push` sobre `stable/*` existe porque la via de despliegue real de este fork es
+  # push DIRECTO a `stable/3.22`, sin PR de por medio. Mientras todo disparara solo
+  # en `pull_request`, la CI no vigilaba NADA en el unico camino que se usa: un
+  # `schema.graphql` desincronizado del codigo llegaba a Railway sin que nadie mirara.
+  #
+  # Honestidad sobre lo que este trigger ES y lo que NO es: en `push`, `puerta` es una
+  # ALARMA POST-HOC, no un gate. Railway despliega el commit en paralelo y no espera a
+  # la CI; cuando el job termina, la version mala ya esta arriba. Lo que aporta es la X
+  # roja en el commit y el correo al autor -- que alguien se entere en minutos, no en el
+  # proximo `npm run codegen` del storefront. Un gate de verdad exigiria rama protegida
+  # y PR obligatorio, y eso es otra decision, con otro coste de flujo.
+  push:
+    branches: [ 'stable/*' ]
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [ 'stable/*' ]
@@ -45,6 +58,9 @@ env:
   SECRET_KEY: ci-test
 
 # Agrupa por workflow + PR (o ref, cuando no hay PR). Un push nuevo cancela el anterior.
+# En `push` sobre `stable/*` eso significa que dos commits seguidos dejan viva solo la
+# alarma del segundo. No se pierde senal: el segundo run mide el arbol resultante, que
+# sigue teniendo la deriva mientras nadie la arregle.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -53,7 +69,8 @@ jobs:
   # ---------------------------------------------------------------------------
   # Puerta rapida: lo que un parche 3.22.x rompe de verdad contra los parches locales
   # del fork -- un import roto por un rename upstream, una migracion que falta, deriva
-  # de configuracion. Corre SIEMPRE, tambien en `alcance: rapido`.
+  # de configuracion. Corre SIEMPRE: en PR, en `alcance: rapido` y en `push` -- donde es
+  # el UNICO job que corre (ver las condiciones de `linters` y `suite` mas abajo).
   #
   # Son SEIS parches locales, no diecinueve: `manage.py`, `saleor/asgi/__init__.py`,
   # `saleor/celeryconf.py`, `pyproject.toml`, la migracion `discount/0052` y el
@@ -106,6 +123,31 @@ jobs:
       - name: No faltan migraciones
         run: uv run python manage.py makemigrations --check --dry-run
 
+      # Hermano conceptual del paso de arriba: los dos preguntan si un ARTEFACTO
+      # DERIVADO Y COMMITEADO sigue sincronizado con el codigo. `saleor/graphql/
+      # schema.graphql` esta versionado en el fork, y el storefront Nuxt VENDORIZA esa
+      # copia para generar sus tipos TypeScript. Si un parche local toca la capa GraphQL
+      # y nadie regenera, el archivo miente aqui y la mentira se descubre alla: en otro
+      # repo, dias despues, como un tipo que no cuadra.
+      #
+      # Por que aqui y no en `linters`: el hook `gql-schema-check` ya existe en
+      # `.pre-commit-config.yaml`, pero (a) `linters` corre `pre-commit run --all`
+      # entero -- mypy, semgrep, deptry, ~20 min de runner -- para un resultado que
+      # cuesta unos 10 s, y (b) `linters` NO corre en `push`, que es justo el camino que
+      # hay que cubrir. Aparte: `pre-commit install` nunca se ejecuto en este repo, asi
+      # que ese hook tampoco se dispara al commitear en local. Este paso no depende de el.
+      #
+      # `uv run` para heredar el entorno ya sincronizado: el guion usa `${PYTHON:-python}`
+      # y `uv run` deja `.venv/bin` primero en el PATH, de modo que `python` es el bueno
+      # sin codificar ninguna ruta. `sh` explicito, sin depender del bit de ejecucion.
+      #
+      # El guion distingue tres respuestas: 0 fiel, 1 deriva real, 2 "no pude preguntar"
+      # (entorno roto, Postgres caido, salida vacia). Aqui 1 y 2 fallan los dos, a
+      # proposito: en CI un "no se" es rojo. Nunca escribe sobre el esquema: genera a un
+      # temporal fuera del repo. Contrato completo en el encabezado del guion.
+      - name: El esquema GraphQL commiteado es fiel al codigo
+        run: uv run sh scripts/check-schema-fidelity.sh
+
   # ---------------------------------------------------------------------------
   # Linters completos via pre-commit. Se salta cuando el dispatch pidio `rapido`.
   #
@@ -115,13 +157,23 @@ jobs:
   # or corta antes de mirar `inputs` en todo evento que no sea dispatch, de modo que
   # el comportamiento en PR no depende de como GitHub decida poblar (o no) `inputs`
   # en eventos donde ese contexto no aplica. En PR corren los tres jobs.
+  #
+  # El `github.event_name != 'push'` de delante NO es decorativo: sin el, la condicion
+  # antigua evaluaba TRUE en `push` (no es dispatch, luego la or ya cortaba en true) y
+  # anadir el trigger habria puesto los TRES jobs a correr en cada push -- 20 min de
+  # linters y 60 de suite por commit, lo contrario de lo que se busca. `push` debe
+  # ejecutar solo la puerta.
+  #
+  # Los parentesis del segundo termino tampoco son decorativos: en las expresiones de
+  # GitHub `&&` liga mas fuerte que `||`, asi que sin ellos esto seria
+  # `(A && B) || C`, que vuelve a dar true en un dispatch `rapido`.
   # ---------------------------------------------------------------------------
   linters:
     name: Linters (pre-commit)
     runs-on: ubuntu-latest
     container: python:3.12
     timeout-minutes: 20
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido' }}
+    if: ${{ github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido') }}
 
     steps:
       - uses: actions/checkout@v5
@@ -154,14 +206,16 @@ jobs:
   # ---------------------------------------------------------------------------
   # Suite completa. Sin cobertura: el fork no la sube a ningun servicio externo (no
   # tiene el secreto que haria falta) y quitarla ahorra minutos de runner.
-  # Misma condicion que `linters`.
+  # Misma condicion que `linters`, incluido el corte en `push`: 60 min de runner por
+  # commit no gatearian nada, porque Railway ya esta desplegando en paralelo sin
+  # esperar el resultado. En `push` la unica pregunta que se paga es la de la puerta.
   # ---------------------------------------------------------------------------
   suite:
     name: Suite completa (17k tests)
     runs-on: ubuntu-latest
     container: python:3.12
     timeout-minutes: 60
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido' }}
+    if: ${{ github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido') }}
 
     services:
       postgres:

@@ -270,6 +270,131 @@ porque el sync a 3.22.67 trajo migraciones y nadie migró la base local.
 que no hay nada del otro lado con qué chocar. En un re-fork limpio se copia con el resto de
 `scripts/`.
 
+### 2026-09-03 — Guion de fidelidad del esquema GraphQL y `push` en la CI (base: 3.22.67)
+
+**Archivos añadidos:**
+
+- `scripts/check-schema-fidelity.sh` — **nuevo, sin equivalente en upstream.** Hermano de
+  `check-migrations.sh`: mismo tipo de pregunta (¿el artefacto derivado y commiteado sigue
+  sincronizado con el código?), mismo contrato de salida, mismo compromiso de no mutar nada.
+  Responde si `saleor/graphql/schema.graphql` es byte a byte lo que emite
+  `manage.py get_graphql_schema`. **Nunca escribe sobre el esquema**: genera a un temporal
+  (`mktemp -d`, fuera del repo, borrado con `trap`).
+  Contrato de salida: **0** = fiel · **1** = deriva real (accionable: regenerar, y el guion
+  imprime el comando exacto) · **2** = **no se pudo responder** (entorno Python roto,
+  `manage.py` caído, Postgres apagado, salida vacía o que no parece un SDL).
+  **La distinción 1/2 es la razón de ser del guion.** El comando de la comprobación —
+  `manage.py get_graphql_schema | diff saleor/graphql/schema.graphql -` — falla de forma
+  engañosa: si `manage.py` muere, su stdout sale **vacío** y `diff` reporta las ~38 000 líneas
+  del archivo como diferentes. Eso parece deriva catastrófica y en realidad es "no pude
+  preguntar". Por eso el guion valida el **exit code**, que la salida **no esté vacía** y que
+  **empiece por `schema {`** ANTES de mirar el diff.
+  Intérprete configurable con `${PYTHON:-python}`, `sh` POSIX puro, funciona desde cualquier
+  cwd (resuelve la raíz desde `$0`) — las mismas convenciones que `check-migrations.sh`.
+
+**Archivos modificados:**
+
+- `.github/workflows/ci-fork.yml` — tres cambios:
+  1. Trigger `push: branches: ['stable/*']` nuevo.
+  2. Paso nuevo en `puerta`: `uv run sh scripts/check-schema-fidelity.sh`, colocado junto a
+     `No faltan migraciones`, que es su hermano conceptual.
+  3. `github.event_name != 'push' &&` antepuesto a los `if:` de `linters` y `suite`, con el
+     segundo término entre paréntesis.
+
+**Motivo — por qué el invariante no estaba vigilado en ningún sitio:**
+
+`saleor/graphql/schema.graphql` está commiteado en el fork y **el storefront Nuxt vendoriza esa
+copia** para generar sus tipos TypeScript. Si un parche local toca la capa GraphQL y nadie
+regenera, el archivo miente aquí y la mentira se descubre allá: en otro repo, días después.
+Medido el 2026-09-03, el enforcement era **cero en el camino que se usa**:
+
+| Vía | Estado medido |
+|---|---|
+| Hook `gql-schema-check` de `.pre-commit-config.yaml` | Declarado, pero **`.git/hooks/` solo tiene los `.sample`**: `pre-commit install` nunca se corrió. No se dispara en ningún commit local. |
+| `ci-fork.yml` | Disparaba solo en `pull_request` sobre `stable/*` y `workflow_dispatch`. **Sin trigger `push`.** |
+| Despliegue real | **Push directo a `stable/3.22`, sin PR.** |
+
+O sea: el único camino que se usa no pasaba por ninguna de las dos comprobaciones.
+
+**Motivo — por qué el check entra en `puerta` y no en `linters`:**
+
+`puerta` es el job que corre siempre, y el check de esquema es de la **misma clase** que
+`makemigrations --check`: artefacto derivado desincronizado del código. `linters` corre
+`pre-commit run --all` **entero** —mypy, semgrep, deptry, ~20 min de runner— para un resultado
+que cuesta **9,5 s** (medido en local, ver abajo); y además `linters` no corre en `push`, que es
+justo el camino a cubrir. `suite` tampoco entra en `push`: 60 min de runner que no gatean nada,
+porque **Railway despliega el commit en paralelo sin esperar a la CI**.
+
+**El gotcha de las condiciones, y por qué había que tocarlas.** Los `if:` antiguos eran
+`${{ github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido' }}`, que evalúa
+**TRUE en `push`** (no es dispatch → la `or` corta en true). Añadir el trigger sin tocarlos
+habría puesto los **tres** jobs a correr en cada push — 20 min de linters y 60 de suite por
+commit, exactamente lo contrario de lo que se busca. Los paréntesis del segundo término tampoco
+son decorativos: en las expresiones de GitHub `&&` liga más fuerte que `||`, así que sin ellos
+la condición sería `(A && B) || C` y volvería a dar true en un dispatch `rapido`.
+
+**Qué es y qué NO es este trigger, dicho sin adornos.** En `push`, `puerta` es una **alarma
+post-hoc, no un gate**. Railway no espera a la CI: cuando el job termina, la versión mala ya está
+arriba. Lo que aporta es la X roja en el commit y el correo al autor — que alguien se entere en
+minutos en vez de en el próximo `npm run codegen` del storefront. Un gate de verdad exigiría rama
+protegida y PR obligatorio; esa es otra decisión, con otro coste de flujo, y no se toma aquí.
+
+**Política de fallo, deliberadamente distinta por capa.** En CI, exit 1 y exit 2 fallan los dos:
+un "no sé" en CI es rojo (falla cerrado). Un llamador que deba **callar** ante el 2 —la sesión
+nocturna, por ejemplo— tiene que distinguirlo, y por eso el guion no colapsa los dos códigos.
+
+**Verificación (2026-09-03, sobre el worktree `hardening/gate-esquema-1.43`):**
+
+- Los tres códigos de salida, medidos de verdad:
+
+| Caso | Cómo se forzó | Resultado |
+|---|---|---|
+| Esquema fiel | tal cual, e invocado desde `/` para probar la independencia del cwd | **exit 0** |
+| Deriva real | copia del esquema con una línea borrada y cuatro añadidas, restaurada después | **exit 1**, `+1 línea(s) que faltan · -5 línea(s) que sobran` + comando de regeneración |
+| Intérprete que muere | `PYTHON=/usr/bin/false` (existe, ejecutable, sale 1, stdout vacío) | **exit 2**, no 1 |
+| Python real sin dependencias | `PYTHON=/usr/bin/python3` | **exit 2**, `Línea reveladora: ModuleNotFoundError: No module named 'dotenv'` |
+| Intérprete mudo que sale 0 | `PYTHON=/usr/bin/true` | **exit 2**, `salió 0 pero no imprimió nada` |
+| Intérprete inexistente | `PYTHON=/no/existe/python` | **exit 2** |
+
+  Tras el caso de deriva, el `sha256` del esquema volvió a ser idéntico al de partida
+  (`b4070edb…`) y `git status` quedó limpio: el guion **no escribió** sobre el archivo en ningún
+  momento; la deriva la fabricó el test, no el guion.
+
+- Coste: **9,48 s** (`time`, en local). Es lo que se le añade a `puerta`.
+- `sh -n scripts/check-schema-fidelity.sh` → sintaxis OK. `shellcheck` **no está instalado** en la
+  máquina; el guion no pasó por él.
+- `python3 -c "import yaml; yaml.safe_load(...)"` sobre `ci-fork.yml` → válido; los triggers
+  quedan `['push', 'pull_request', 'workflow_dispatch']` y `puerta` sigue **sin `if:`**.
+  `actionlint` **no está instalado**; la validación es de YAML, no de la semántica de Actions.
+- Tabla de verdad de los `if:` de `linters` y `suite`, con
+  `A = event_name != 'push'` y `B = event_name != 'workflow_dispatch'`, `C = inputs.alcance != 'rapido'`:
+
+| Evento | A | B | C | `A && (B \|\| C)` | Jobs que corren |
+|---|---|---|---|---|---|
+| `push` sobre `stable/*` | false | true | true | **false** | solo `puerta` |
+| `pull_request` | true | true | true (`inputs` vacío) | **true** | los tres |
+| `workflow_dispatch` `alcance: completo` | true | false | true | **true** | los tres |
+| `workflow_dispatch` `alcance: rapido` | true | false | false | **false** | solo `puerta` |
+
+- **No verificado:** que el workflow se comporte así en GitHub. Requiere un push real a
+  `stable/3.22` y no se hizo desde esta sesión. Lo medido es el YAML y la lógica de la expresión.
+
+- **`AGENTS.md` (= `CLAUDE.md`, que es un symlink a él) — corregida una ruta que causaba justo
+  este defecto.** La sección "Comandos clave" decía
+  `python manage.py get_graphql_schema > schema.graphql`: ruta equivocada. Seguirla crea un
+  `schema.graphql` huérfano en la raíz del repo y deja **sin regenerar** el archivo versionado
+  de verdad, `saleor/graphql/schema.graphql` — es decir, la documentación del propio fork
+  describía el camino más corto para producir la deriva que este guion viene a detectar. Ahora
+  apunta a la ruta correcta y remite a `scripts/check-schema-fidelity.sh`.
+  **Deuda de merge: ninguna adicional.** `AGENTS.md` ya está listado más abajo como
+  "reemplazamos el de upstream entero", resuelto automáticamente vía `merge=ours` en
+  `.gitattributes`.
+
+**Conflicto potencial al actualizar upstream: ninguno.** Los **dos** archivos son propios del
+fork: `scripts/check-schema-fidelity.sh` no existe en upstream, y `ci-fork.yml` tampoco (y
+`sync-upstream.yml` descarta a propósito todo `.github/workflows/` que llegue del merge). Cero
+deuda de merge por definición: no hay nada del otro lado con qué chocar.
+
 ---
 
 ## Pendiente de upstream
@@ -339,6 +464,7 @@ archivos que upstream no tiene.
 
 Todo lo demás son **archivos que upstream no tiene** —`railway.json`,
 `scripts/railway-entrypoint.sh`, `scripts/wait-for-db.sh`, `scripts/check-migrations.sh`,
+`scripts/check-schema-fidelity.sh`,
 este archivo, nuestros tres workflows, `docs/superpowers/`— y **no pueden conflictuar**:
 no hay nada del otro lado con qué chocar.
 
