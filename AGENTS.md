@@ -63,8 +63,12 @@ python manage.py createsuperuser
 # Tests
 pytest saleor/ -x -q
 
-# Regenerar tipos GraphQL (si modificas el schema)
-python manage.py get_graphql_schema > schema.graphql
+# Regenerar el esquema GraphQL commiteado (si tocas la capa GraphQL).
+# OJO con la ruta: el archivo versionado es saleor/graphql/schema.graphql.
+# Escribirlo en la raiz deja un huerfano y el bueno sin regenerar -- y el
+# storefront vendoriza el bueno para generar sus tipos contra el.
+# Comprobar el invariante: scripts/check-schema-fidelity.sh
+python manage.py get_graphql_schema > saleor/graphql/schema.graphql
 ```
 
 ---
