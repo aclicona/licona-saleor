@@ -27,6 +27,8 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 - `.env.railway.example` — Plantilla de variables de entorno para Railway (sin valores reales).
 - `.github/workflows/sync-upstream.yml` — Sync semanal automático con upstream.
 - `.github/workflows/build-image.yml` — Build y push de imagen Docker a GHCR en cada push a `stable/3.22`.
+  ⚠️ **Retirado del árbol el 2026-09-03 sin haber tenido nunca un run verde** (0 éxitos en 36 runs,
+  la imagen nunca llegó a existir en GHCR y nadie la consumía). Ver la entrada de esa fecha.
 - `.github/workflows/security-scan.yml` — Escaneo Trivy semanal de vulnerabilidades en la imagen.
 
 ### 2026-04-17 — Fix migración discount.0052 para PostgreSQL 15+ (base: 3.22.48)
@@ -406,6 +408,121 @@ fork: `scripts/check-schema-fidelity.sh` no existe en upstream, y `ci-fork.yml` 
 `sync-upstream.yml` descarta a propósito todo `.github/workflows/` que llegue del merge). Cero
 deuda de merge por definición: no hay nada del otro lado con qué chocar.
 
+### 2026-09-03 — Retirada de dos workflows en rojo crónico (base: 3.22.67)
+
+**Archivos eliminados:**
+
+- `.github/workflows/build-image.yml` — **propio del fork, creado el 2026-04-16.** Construía y
+  empujaba `ghcr.io/aclicona/licona-saleor` en cada push y PR sobre `stable/3.22`.
+  **Nunca tuvo un run verde: 0 éxitos en 36 runs**, desde su primer día hasta hoy. La causa es una
+  línea que falta, no una que sobre: el workflow pide `cache-to: type=gha` a
+  `docker/build-push-action@v5` sin haber corrido antes `docker/setup-buildx-action@v3`, así que
+  el build usa el driver `docker` por defecto y muere siempre con
+  `ERROR: failed to build: Cache export is not supported for the docker driver.`
+- `.github/workflows/test-env-cleanup-cron.yml` — **heredado de upstream.** Cron diario (`0 2 * * *`
+  UTC) que asume un lambda `test-env-manager` y una cuenta AWS de entornos de test de Saleor Inc.
+  Nosotros no tenemos ni el lambda ni la cuenta ni los secretos (`AWS_TESTENVS_ACCOUNT_ID`,
+  `AWS_TESTENVS_CICD_ROLE_NAME`), así que muere en el primer paso.
+  **12 de 12 runs en rojo.** Nótese que es el *cron*: `test-env-cleanup.yml` (el disparado por
+  evento de PR) se queda, porque sin `schedule` no se ejecuta solo.
+
+**Por qué borrar y no arreglar `build-image.yml` — lo medido, no lo opinado:**
+
+| Pregunta | Medición del 2026-09-03 |
+|---|---|
+| ¿Existe la imagen? | `gh api /users/aclicona/packages/container/licona-saleor/versions` → **`404 Package not found`**. Nunca se publicó ni una versión. |
+| ¿Quién la consume? | `grep -rn "ghcr.io/aclicona/licona-saleor"` sobre los **tres** repos y todas las docs → **cero coincidencias**. |
+| ¿La usa Railway? | No. `railway.json` declara `"builder": "DOCKERFILE"`: Railway construye desde el fuente. |
+| ¿La usa el escaneo? | No. `security-scan.yml:20` hace `docker build -t licona-saleor:scan .` en local; no lee GHCR. |
+
+Un artefacto que nunca existió y que nadie lee no es una pieza rota: es una pieza que no está en
+el sistema. **El artefacto de replicabilidad real de este fork es el `Dockerfile` versionado +
+`uv.lock` + el SHA de `stable/3.22`**, que es lo que Railway construye. Arreglar el workflow
+habría añadido un segundo camino de build —con su propia caché, su propio drift y su propia
+superficie de mantenimiento— para producir bits que nadie iba a descargar.
+
+**Por qué corría prisa, y no era estética.** `build-image.yml` disparaba en `push` a `stable/3.22`,
+o sea en la **misma lista de checks del commit** que el guardarraíl `puerta` de `ci-fork.yml`
+instalado hoy. Medido sobre el HEAD `30e235659e`: `Puerta rapida: success`, `trivy: success`,
+`build: failure` → **estado agregado del commit = `failure`**. El guardarraíl recién puesto nacía
+ya dentro de una X roja permanente, que es la forma más rápida de enseñarle a un equipo que las X
+rojas de este repo no significan nada.
+
+**Regla general que esto fija, aplicable a todo el fork:**
+
+> **Lo que no está en el árbol no existe para la instancia N+1.** Se borra en el árbol, **nunca**
+> con `gh workflow disable` ni desde la UI de Actions.
+
+El modelo de negocio es single-tenant replicable: cada cliente es un clone. El estado de "disabled"
+de un workflow vive en la base de datos de GitHub del repo original y **no se clona**; el archivo
+sí. Deshabilitar por UI produce una instancia N+1 que arranca con el cron rojo del día uno y con
+un humano preguntándose por qué "en el repo de referencia no salía".
+
+**Archivos modificados:**
+
+- `.github/workflows/sync-upstream.yml` — el reset de `.github/workflows/` pasa a ser una
+  restauración **completa** del directorio:
+
+  ```sh
+  rm -rf .github/workflows
+  if ! git checkout "$BASE_SHA" -- .github/workflows/; then
+    echo "::error::No se pudo restaurar .github/workflows/ desde $BASE_SHA."
+    exit 1
+  fi
+  ```
+
+  **Motivo:** `git checkout <sha> -- <dir>` **restaura** lo que existe en `<sha>` pero **no elimina**
+  lo que el merge haya dejado en el índice y `<sha>` no tenga. El comentario del propio archivo ya
+  daba por hecho que descartaba "los workflows de upstream" en bloque; no era cierto. El defecto ya
+  existía —bastaba con que upstream añadiera un workflow para que el push muriera con el error de
+  permiso `workflows` que ese mismo comentario documenta—, y borrar archivos del fork lo amplía:
+  upstream **sigue teniendo** `test-env-cleanup-cron.yml`, así que cada merge semanal lo
+  re-añadiría y el `checkout` no lo quitaría. El `git add -A` que ya estaba tres líneas más abajo
+  estagea las eliminaciones sin cambio adicional.
+
+  **Por qué el `if !` en vez del `|| true` heredado:** el paso corre con `set -uo pipefail`, **sin
+  `-e`**. Con `rm -rf` delante, un `|| true` convertiría un `checkout` fallido en "borra los 24
+  workflows y ábrelo como PR de sync". Se comprueba a mano y se sale con 1: falla cerrado.
+
+- `UPGRADE_NOTES.md` — la línea de "Archivos creados" del 2026-04-16 documentaba `build-image.yml`
+  como pieza activa; ahora dice que se retiró y apunta aquí. La receta de salto de minor (3.22 →
+  3.23) mandaba "apuntar `build-image.yml` y `sync-upstream.yml` a `stable/3.23`": era una
+  instrucción hacia un archivo que ya no existe.
+
+**Receta literal de reintroducción**, si algún día hace falta publicar imagen. Lo que faltaba era
+un paso, en este orden, antes del `build-push-action`:
+
+```yaml
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+```
+
+Sin él, el driver por defecto es `docker`, que no implementa export de caché; con él se levanta el
+driver `docker-container`, que sí. Es la línea que habría bastado, y es exactamente la razón por la
+que borrarlo no es "renunciar a algo difícil".
+
+**Condiciones que tendrían que cumplirse para que valga la pena volver a añadirlo** — ninguna se
+cumple hoy, y por eso no se añade:
+
+1. **Varias instancias que deban recibir bits idénticos** sin reconstruir cada una. Hoy hay una
+   instancia y Railway reconstruye; con N clientes, N builds de la misma imagen es desperdicio y,
+   peor, N oportunidades de que los bits difieran.
+2. **El build de Railway convertido en cuello de botella** (tiempo de despliegue o minutos de
+   build) de forma medida, no supuesta.
+3. **Necesidad de rollback a una imagen pinneada** por digest que el historial de despliegues de
+   Railway no cubra.
+
+Si se reintroduce: el workflow vuelve **al árbol** (no se rehabilita nada por UI), se le añade el
+`setup-buildx-action`, y **se verifica que el package existe en GHCR** antes de anotarlo aquí como
+pieza activa — que es precisamente el paso que no se dio en abril.
+
+**Conflicto potencial al actualizar upstream:** **ninguno, por construcción.**
+`build-image.yml` es propio del fork y `sync-upstream.yml` también.
+`test-env-cleanup-cron.yml` **sí** existe en upstream y el merge semanal lo re-añadiría — es
+justo el caso que cubre el `rm -rf` de arriba, que lo vuelve a borrar en cada sync sin
+intervención humana. Coste de sync recurrente: **cero**, y por la misma razón de siempre:
+`.github/workflows/` del fork no sigue a upstream (decisión del 2026-08-22).
+
 ---
 
 ## Pendiente de upstream
@@ -546,8 +663,9 @@ divergencia crece** y reaplicar a mano deja de ser realista.
 **Cierre del salto, con cualquiera de las dos:**
 
 1. Actualizar `version` en `pyproject.toml`.
-2. Apuntar `build-image.yml` y `sync-upstream.yml` a `stable/3.23` (los `ref:` de los
-   checkouts y el `--base` del PR).
+2. Apuntar `sync-upstream.yml` a `stable/3.23` (los `ref:` de los checkouts y el
+   `--base` del PR). `ci-fork.yml` no hay que tocarlo: dispara sobre `stable/*`.
+   (Aquí figuraba también `build-image.yml`; se retiró del árbol el 2026-09-03.)
 3. ⚠️ **Cambiar la rama por defecto del repo a `stable/3.23`.**
    ```sh
    gh repo edit aclicona/licona-saleor --default-branch stable/3.23

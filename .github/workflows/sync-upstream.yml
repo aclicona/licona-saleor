@@ -183,7 +183,25 @@ jobs:
           # en silencio. Si algún día hiciera falta un workflow de upstream, se trae a
           # mano. Nota: esto significa que `.github/workflows/` del fork NO sigue a
           # upstream. Es la decisión tomada el 2026-08-22, no un descuido.
-          git checkout "$BASE_SHA" -- .github/workflows/ 2>/dev/null || true
+          #
+          # El `rm -rf` no es paranoia: sin él el reset es INCOMPLETO. `git checkout
+          # <sha> -- <dir>` RESTAURA lo que existe en `<sha>`, pero NO BORRA lo que el
+          # merge haya dejado en el índice y `<sha>` no tenga. Un workflow que upstream
+          # añada —o que nosotros hayamos borrado a propósito y upstream siga teniendo,
+          # como `test-env-cleanup-cron.yml` desde el 2026-09-03— sobrevive al reset y
+          # el push muere con el error de permiso `workflows` de arriba. Vaciar el
+          # directorio antes convierte el reset en la restauración completa que este
+          # comentario siempre creyó describir. Las eliminaciones las estagea el
+          # `git add -A` de tres líneas más abajo.
+          #
+          # El fallo del checkout se comprueba a mano porque este paso corre con
+          # `set -uo pipefail`, SIN `-e`: un `|| true` heredado convertiría un restore
+          # fallido en "borra todos los workflows y ábrelo como PR".
+          rm -rf .github/workflows
+          if ! git checkout "$BASE_SHA" -- .github/workflows/; then
+            echo "::error::No se pudo restaurar .github/workflows/ desde $BASE_SHA."
+            exit 1
+          fi
 
           CONFLICTED=$(git diff --name-only --diff-filter=U | sed 's/^/- `/;s/$/`/')
           git add -A
