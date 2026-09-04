@@ -376,8 +376,19 @@ nocturna, por ejemplo— tiene que distinguirlo, y por eso el guion no colapsa l
 | `workflow_dispatch` `alcance: completo` | true | false | true | **true** | los tres |
 | `workflow_dispatch` `alcance: rapido` | true | false | false | **false** | solo `puerta` |
 
-- **No verificado:** que el workflow se comporte así en GitHub. Requiere un push real a
-  `stable/3.22` y no se hizo desde esta sesión. Lo medido es el YAML y la lógica de la expresión.
+- **Verificado en GitHub el 2026-09-03**, no solo razonado sobre el YAML. Push de `5d27391e` a
+  `stable/3.22` a las 19:21 → run
+  [33821463025](https://github.com/aclicona/licona-saleor/actions/runs/33821463025), evento `push`:
+  `Puerta rapida` **success**, `Linters (pre-commit)` **skipped**, `Suite completa` **skipped** —
+  exactamente la fila `push` de la tabla de arriba. El paso nuevo salió
+  `[check-schema-fidelity] El esquema commiteado es fiel al código`, en **~10 s** (00:23:05 →
+  00:23:15 UTC).
+- **Y de paso quedó medido el agujero que el trigger `push` viene a tapar:** los dos PR abiertos del
+  repo —#4 (sync 3.22.68) y #5 (bump de dependencias)— tienen runs de `ci-fork.yml` en estado
+  `action_required` con **0 s y CERO jobs ejecutados**. Es el gotcha ya documentado (un PR abierto
+  con `secrets.GITHUB_TOKEN` no dispara workflows), pero su consecuencia no se había medido: el job
+  `linters` —el único que corría `pre-commit run --all` y con él `gql-schema-check`— **solo se ha
+  ejecutado dos veces en la vida del repo**, ambas por `workflow_dispatch` manual el 2026-08-27.
 
 - **`AGENTS.md` (= `CLAUDE.md`, que es un symlink a él) — corregida una ruta que causaba justo
   este defecto.** La sección "Comandos clave" decía
