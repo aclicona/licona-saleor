@@ -532,25 +532,44 @@ intervención humana. Coste de sync recurrente: **cero**, y por la misma razón 
   externo sigue sincronizado con lo que el fork afirma?), mismo contrato de tres códigos, mismo
   compromiso de **no mutar nada**. Responde si la branch protection de la rama de despliegue
   coincide con el contrato esperado. Solo hace GET: **ninguna llamada suya usa `-X`**, y el
-  `gh api -X PUT ...` que imprime como remedio **jamás lo ejecuta**.
+  `gh api -X PUT ...` que imprime como remedio **jamás lo ejecuta**. Junto a ese remedio el
+  guion ahora imprime un aviso: `PUT /protection` reemplaza el objeto entero, así que aplicarlo
+  a ciegas borraría en silencio cualquier ajuste que el cliente ya tuviera puesto a propósito.
   Contrato de salida: **0** = coincide · **1** = deriva real (la rama existe pero no está
   protegida, o algún campo no cuadra) · **2** = **no se pudo responder** (no hay `gh`, no hay
-  sesión autenticada, el repo o la rama no existen, 403 por permisos, JSON ilegible).
+  sesión autenticada, el repo o la rama no existen, el token no tiene permiso de admin para
+  leer la protección, o la respuesta de la API es ilegible o incompleta).
   **La distinción 1/2 es la razón de ser del guion**, y aquí el modo de fallo es más sutil que
-  en sus hermanos: la API de GitHub devuelve **el mismo HTTP 404 para dos preguntas distintas**.
-  Un 404 en `/branches/<rama>/protection` significa "la rama existe pero NO está protegida"
-  —deriva real, accionable, exit 1—; un 404 porque el repo o la rama no existen es "no sé",
-  exit 2. Por eso el guion consulta **primero** `/branches/<rama>` y solo después
-  `/protection`: tratar cualquier 404 como "no protegida" confundiría un typo en `REPO`/`RAMA`
-  con una réplica desprotegida de verdad. Un 403 (token sin permiso de admin para leer la
-  protección) es **siempre** 2, nunca 1.
+  en sus hermanos: el 404 de `/branches/<rama>/protection` es ambiguo en **tres** sentidos, no
+  dos. Puede significar "la rama no existe" (typo en `REPO`/`RAMA`), "la rama existe y NO está
+  protegida" —deriva real, exit 1— o, medido contra la API real, "la rama existe y SÍ está
+  protegida, pero el token no tiene permiso de **admin** sobre el repo para leer el detalle"
+  —exit 2, no exit 1—. Este tercer caso es el que se confundía con el segundo:
+  `GET /repos/{owner}/{repo}/branches/{rama}/protection` devuelve **404, no 403**, cuando falta
+  ese permiso, así que asumir "404 en `/protection` = no protegida" invierte el resultado justo
+  en el caso que más importa (una réplica de cliente, o un `GITHUB_TOKEN` de CI sin
+  `permissions: administration: read`). Por eso el guion consulta **primero**
+  `/branches/<rama>` —que sí expone `.protected` sin permiso de admin, medido— y usa ese campo
+  como desempate antes de mirar `/protection`: `.protected == false` más 404 en `/protection` es
+  deriva real (exit 1); `.protected == true` más 404 en `/protection` es "no sé" (exit 2), y en
+  ese caso el guion **no** imprime el `PUT` de remedio, porque sugerirlo sobre una rama que sí
+  está protegida sería un consejo destructivo. La rama del 403 (token sin ningún acceso al
+  repo) sigue existiendo como mecanismo secundario, pero ya no es la vía principal a exit 2: el
+  mecanismo real es este 404 ambiguo, desambiguado por `.protected`. Leer el detalle completo
+  de la protección sigue exigiendo un token con `admin` sobre el repo (o
+  `permissions: administration: read` si esto se cablea alguna vez en un workflow).
   Parametrizable por entorno con defaults de este fork —`REPO="${REPO:-aclicona/licona-saleor}"`
   y `RAMA="${RAMA:-stable/3.22}"`—, de modo que la réplica de un cliente se verifica sin editar
   el guion: `REPO=cliente/su-saleor sh scripts/check-branch-protection.sh`. El `/` de la rama se
   escapa a `%2F` en la ruta de `gh api`. Una sola llamada para los cinco campos, con el `--jq`
   **embebido de `gh`** (no añade dependencia de un `jq` externo) y emitiendo una línea por campo
   —no `@tsv`: con `IFS` de tabulador el shell colapsa los campos vacíos y la lectura se
-  desincroniza en silencio. `sh` POSIX puro, sin `set -e`, como los otros guiones de `scripts/`.
+  desincroniza en silencio. Antes de comparar nada, el guion valida que la salida traiga
+  exactamente cinco líneas y que los campos booleanos no lleguen vacíos; si no, **exit 2,
+  nunca 1** — mismo principio que la guarda de `check-schema-fidelity.sh` ("salida no vacía Y
+  parece un esquema" antes de mirar el diff). Sin esa validación, una respuesta vacía con
+  exit 0 fabricaría cinco derivas, y una truncada a tres líneas desincronizaría los campos en
+  silencio. `sh` POSIX puro, sin `set -e`, como los otros guiones de `scripts/`.
 
 - `saleor/tests/test_fork_branch_protection_drift.py` — **nuevo, sin equivalente en upstream.**
   Mismo patrón que los tests de deriva que el proyecto ya usa en sus repos hermanos
@@ -591,6 +610,13 @@ obtener un sí o un no, con el comando de arreglo impreso.
 El guion no se limita a nombrar el campo que no cuadra: imprime **esperado vs encontrado y la
 consecuencia concreta** de esa tabla, y acumula todas las derivas en una sola corrida en vez de
 cortar en la primera.
+
+**Límite de esa afirmación:** el guion valida esos cinco campos y **solo** esos. La API
+devuelve más —`lock_branch`, `restrictions`, `required_pull_request_reviews`,
+`required_conversation_resolution`, entre otros— y un exit 0 no afirma nada sobre ellos: un
+repo con `lock_branch: true`, o con `restrictions` que excluya al usuario que hace el
+despliegue, pasa en verde con el push de despliegue bloqueado. Ampliar la cobertura a los 11
+campos queda en el backlog, no en este commit.
 
 **No se tocó la configuración real de GitHub.** Los tres códigos de salida se ejercitaron contra
 ramas que ya existían: `stable/3.22` para el 0, la rama `3.22` (existente y sin protección, como

@@ -18,6 +18,17 @@ Este test es la señal automática que evita ese silencio: compara ambas
 fuentes de verdad (el guion y el workflow) y falla en rojo el día que se
 separen, con instrucciones de qué hacer.
 
+Este test cubre solo la mitad interna de esa deriva: la coherencia entre
+el guion y el workflow dentro del propio árbol (corre en CI, sin red ni
+credenciales). No puede ver si esa cadena coincide con el required status
+check que GitHub tiene configurado de verdad — esa otra mitad la cubre
+`scripts/check-branch-protection.sh` corriendo contra la API de GitHub.
+Por eso un rename consistente (job y guion cambiados juntos, a la misma
+cadena nueva) deja este test en verde: las dos fuentes siguen coincidiendo
+entre sí, aunque GitHub siga esperando el nombre viejo. Quien lo atrapa es
+el guion, que al comparar `contexts` contra la protección real sale con
+exit 1. Ninguna de las dos piezas sustituye a la otra.
+
 Por qué vive aquí y no en la raíz del fork o en `scripts/`: el fork todavía no
 tiene una suite de tests propia, y `setup.cfg` fija `testpaths = saleor`, así
 que un archivo fuera de `saleor/` no lo recogería ni un `pytest` corrido sin
@@ -65,7 +76,10 @@ def _nombre_del_job_puerta() -> str:
         "id del job (no solo su `name:`), revisa también la branch "
         "protection real en GitHub."
     )
-    return jobs["puerta"]["name"]
+    # Sin `name:`, GitHub usa el id del job ("puerta") como nombre visible
+    # del check: ese es el fallback correcto (no None ni ""), para que el
+    # test siga comparando contra lo que GitHub mostraría en la realidad.
+    return jobs["puerta"].get("name", "puerta")
 
 
 def test_contexto_esperado_coincide_con_el_nombre_del_job_puerta():
@@ -115,6 +129,10 @@ def test_guion_y_job_existen():
     assert _contexto_esperado_del_guion(), (
         f"{GUION} existe pero CONTEXTO_ESPERADO está vacío o no se pudo leer."
     )
-    assert _nombre_del_job_puerta(), (
+    # No reutiliza _nombre_del_job_puerta(): con el fallback a "puerta" esa
+    # función ya siempre devuelve una cadena no vacía, así que este assert
+    # nunca podría fallar. Se comprueba la clave `name` directamente.
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    assert "name" in jobs["puerta"], (
         f"El job `puerta` en {WORKFLOW} existe pero no tiene `name:`."
     )
