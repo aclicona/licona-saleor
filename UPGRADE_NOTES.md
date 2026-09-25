@@ -649,6 +649,7 @@ qué chocar. En un re-fork limpio se copian con el resto de `scripts/`.
 |---|---|---|---|---|
 | 2026-04-16 | — | 3.22.48 | — | Versión base inicial del fork |
 | 2026-08-24 | 3.22.48 | 3.22.67 | [#3](https://github.com/aclicona/licona-saleor/pull/3) | 19 parches. **Dos CVE**: 2026-48744 (bypass de autorización) y 2026-44472 (secuestro de fusión de cuentas). Único conflicto `uv.lock`, regenerado. 3 migraciones, ninguna destructiva. Cero breaking changes de GraphQL. Ver [bitácora](../docs/hardening/sessions/2026-08-24-sync-upstream-3.22.67.md) |
+| 2026-09-25 | 3.22.67 | 3.22.71 | — | 4 parches (3.22.68..3.22.71). **Un parche de seguridad**: mitigación de DoS por *decompression bomb* de imagen (CWE-409), nuevo `MAX_IMAGE_PIXELS` con valor por defecto 30 M px (admite 5000×5000 con margen; Pillow recibe la mitad del valor a propósito). Ningún CVE/GHSA anunciado para el rango. Único conflicto `uv.lock`, regenerado. Bumps `cryptography` 50.0.1, `pyjwt` 2.15.0, `sqlparse` 0.6.0. `product/0173` modificada (no nueva: no se re-ejecuta). Cero cambios en `schema.graphql`. |
 
 ---
 
