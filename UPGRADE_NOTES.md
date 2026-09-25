@@ -523,6 +523,84 @@ justo el caso que cubre el `rm -rf` de arriba, que lo vuelve a borrar en cada sy
 intervención humana. Coste de sync recurrente: **cero**, y por la misma razón de siempre:
 `.github/workflows/` del fork no sigue a upstream (decisión del 2026-08-22).
 
+### 2026-09-25 — Guion de branch protection y test de deriva del context (base: 3.22.67)
+
+**Archivos añadidos:**
+
+- `scripts/check-branch-protection.sh` — **nuevo, sin equivalente en upstream.** Tercer hermano
+  de `check-migrations.sh` y `check-schema-fidelity.sh`: misma pregunta de fondo (¿el estado
+  externo sigue sincronizado con lo que el fork afirma?), mismo contrato de tres códigos, mismo
+  compromiso de **no mutar nada**. Responde si la branch protection de la rama de despliegue
+  coincide con el contrato esperado. Solo hace GET: **ninguna llamada suya usa `-X`**, y el
+  `gh api -X PUT ...` que imprime como remedio **jamás lo ejecuta**.
+  Contrato de salida: **0** = coincide · **1** = deriva real (la rama existe pero no está
+  protegida, o algún campo no cuadra) · **2** = **no se pudo responder** (no hay `gh`, no hay
+  sesión autenticada, el repo o la rama no existen, 403 por permisos, JSON ilegible).
+  **La distinción 1/2 es la razón de ser del guion**, y aquí el modo de fallo es más sutil que
+  en sus hermanos: la API de GitHub devuelve **el mismo HTTP 404 para dos preguntas distintas**.
+  Un 404 en `/branches/<rama>/protection` significa "la rama existe pero NO está protegida"
+  —deriva real, accionable, exit 1—; un 404 porque el repo o la rama no existen es "no sé",
+  exit 2. Por eso el guion consulta **primero** `/branches/<rama>` y solo después
+  `/protection`: tratar cualquier 404 como "no protegida" confundiría un typo en `REPO`/`RAMA`
+  con una réplica desprotegida de verdad. Un 403 (token sin permiso de admin para leer la
+  protección) es **siempre** 2, nunca 1.
+  Parametrizable por entorno con defaults de este fork —`REPO="${REPO:-aclicona/licona-saleor}"`
+  y `RAMA="${RAMA:-stable/3.22}"`—, de modo que la réplica de un cliente se verifica sin editar
+  el guion: `REPO=cliente/su-saleor sh scripts/check-branch-protection.sh`. El `/` de la rama se
+  escapa a `%2F` en la ruta de `gh api`. Una sola llamada para los cinco campos, con el `--jq`
+  **embebido de `gh`** (no añade dependencia de un `jq` externo) y emitiendo una línea por campo
+  —no `@tsv`: con `IFS` de tabulador el shell colapsa los campos vacíos y la lectura se
+  desincroniza en silencio. `sh` POSIX puro, sin `set -e`, como los otros guiones de `scripts/`.
+
+- `saleor/tests/test_fork_branch_protection_drift.py` — **nuevo, sin equivalente en upstream.**
+  Mismo patrón que los tests de deriva que el proyecto ya usa en sus repos hermanos
+  (`test_celery_queues_drift`, `test_smoke_baseline_prompt_drift`): compara dos fuentes que
+  **tienen que** decir lo mismo y se pone rojo el día que se separan. Aquí las dos fuentes son
+  la constante `CONTEXTO_ESPERADO` de `check-branch-protection.sh` y el `name:` del job `puerta`
+  en `.github/workflows/ci-fork.yml` (hoy, las dos: `Puerta rapida`).
+  **Por qué hace falta:** GitHub identifica los required status checks por su **nombre visible
+  literal**, no por el id del job. Un rename inocente del `name:` deja la branch protection
+  esperando **para siempre** un check que ya nunca vuelve a reportarse — y el síntoma no señala
+  la causa: el job sigue verde con su nombre nuevo y el PR o el push se queda colgado sin
+  ningún error. Nada más en la CI avisa de eso.
+  Vive en `saleor/tests/` y no en la raíz porque `setup.cfg` fija `testpaths = saleor`: un
+  archivo fuera de `saleor/` no lo recogería ni un `pytest` sin argumentos ni el job `suite` de
+  `ci-fork.yml`. **No usa base de datos** —solo lee dos archivos de texto—, así que no pide la
+  fixture `db` ni `@pytest.mark.django_db`. Es el **primer test propio del fork**.
+
+**Motivo (por qué, no solo qué):** la branch protection de `stable/3.22` se activó en agosto y
+desde entonces vivía **solo en la configuración de GitHub**. No está versionada, nadie la
+revisa, y —lo que de verdad duele— **al replicar el fork para un cliente simplemente no está,
+sin que nada lo diga**. Es el mismo modo de fallo que ya mordió dos veces en este repo: permiso
+o ajuste implícito que no viaja con el código, se rompe lejos y miente cerca (el `schedule` que
+solo dispara desde la rama por defecto; el "Workflow permissions" que GitHub pone en `read` en
+los repos nuevos). El guion no puede hacer que la protección viaje —eso GitHub no lo permite—,
+pero sí convierte el silencio en una **afirmación verificable**: la réplica puede preguntar y
+obtener un sí o un no, con el comando de arreglo impreso.
+
+**Contrato afirmado** (verificado el 2026-09-25 contra el repo real; coincide exactamente):
+
+| Campo | Esperado | Consecuencia si cambia |
+|---|---|---|
+| `required_status_checks.contexts` | `["Puerta rapida"]` | Vacío: ningún check gatea el merge. Otro nombre: la rama espera un check que nunca llega y el merge queda bloqueado para siempre |
+| `required_status_checks.strict` | `false` | En `true` exige la rama al día con la base antes de mergear |
+| `enforce_admins.enabled` | `false` | **No es cosmético.** En `true` el push directo de despliegue queda en **deadlock permanente**: la vía real de despliegue de este fork es push directo a `stable/3.22`, sin PR |
+| `allow_force_pushes.enabled` | `true` | En `false` bloquea **también a los admins** y rompe el rollback con `git push --force-with-lease` |
+| `allow_deletions.enabled` | `false` | En `true` cualquiera con permiso de push puede borrar la rama de despliegue |
+
+El guion no se limita a nombrar el campo que no cuadra: imprime **esperado vs encontrado y la
+consecuencia concreta** de esa tabla, y acumula todas las derivas en una sola corrida en vez de
+cortar en la primera.
+
+**No se tocó la configuración real de GitHub.** Los tres códigos de salida se ejercitaron contra
+ramas que ya existían: `stable/3.22` para el 0, la rama `3.22` (existente y sin protección, como
+las otras 67) para el 1, y una rama inexistente para el 2.
+
+**Conflicto potencial al actualizar upstream:** **ninguno.** Ninguno de los dos archivos existe
+en upstream y ninguno toca un archivo de upstream —el test es un archivo nuevo con nombre propio
+(`test_fork_*`) dentro de un directorio que ya existía—, así que no hay nada del otro lado con
+qué chocar. En un re-fork limpio se copian con el resto de `scripts/`.
+
 ---
 
 ## Pendiente de upstream
@@ -592,7 +670,8 @@ archivos que upstream no tiene.
 
 Todo lo demás son **archivos que upstream no tiene** —`railway.json`,
 `scripts/railway-entrypoint.sh`, `scripts/wait-for-db.sh`, `scripts/check-migrations.sh`,
-`scripts/check-schema-fidelity.sh`,
+`scripts/check-schema-fidelity.sh`, `scripts/check-branch-protection.sh`,
+`saleor/tests/test_fork_branch_protection_drift.py`,
 este archivo, nuestros tres workflows, `docs/superpowers/`— y **no pueden conflictuar**:
 no hay nada del otro lado con qué chocar.
 
