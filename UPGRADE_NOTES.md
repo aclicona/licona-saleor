@@ -631,9 +631,9 @@ qué chocar. En un re-fork limpio se copian con el resto de `scripts/`.
 
 ## Pendiente de upstream
 
-| Tema | Estado a fecha 3.22.67 |
+| Tema | Estado a fecha 2026-09-26 (3.22.71 / 3.23.36) |
 |---|---|
-| Fix de `discount.0052` para PostgreSQL 15+ | **Upstream sigue sin arreglarlo.** Verificado el 2026-08-24: `git diff 3.22.48 3.22.67 -- saleor/discount/` sale vacío y nuestro parche difiere de ambos tags en las mismas 7/−3 líneas. Nuestro parche sigue siendo necesario — no volver a auditarlo desde cero en el próximo sync, mirar solo si ese diff deja de estar vacío. |
+| Fix de `discount.0052` para PostgreSQL 15+ | **Corregido en upstream, pero solo en la línea 3.23.** Verificado el 2026-09-26: el commit `f47392d874` arregla el mismo bug con un enfoque más preciso (dropea solo constraints FK/UNIQUE, en lugar de tragarse cualquier excepción), y lo hace **modificando la migración 0052 in-place** — `git diff --name-status 3.22.71 3.23.36 -- saleor/discount/migrations/` → `M saleor/discount/migrations/0052_drop_sales_constraints.py` (y `M .../0045_promotions.py`) — pero ese commit **no es ancestro de `3.22.71`**: solo existe en 3.23. Dentro de 3.22 nuestro parche **sigue siendo necesario** — no volver a auditarlo desde cero, solo confirmar en el próximo sync que sigue sin backportearse. **Trampa para el salto a 3.23:** Django no reejecuta una migración ya aplicada, así que el fix de upstream **no correrá** sobre una base ya migrada, y nuestra versión del parche se tragaba *cualquier* excepción (`exception when others then null`), sin garantía de que los constraints se hubieran soltado de verdad. → Antes del salto, verificar en la base de datos real que los constraints objetivo ya no existen: es la única parte del salto que puede haber dejado la BD en un estado distinto del que el código supone. |
 
 ## Deuda del fork
 
@@ -713,6 +713,112 @@ GraphQL**, no en este fork.
 | `AGENTS.md` | Reemplazamos el de upstream entero | **Automático** vía `merge=ours` en `.gitattributes` — requiere `git config merge.ours.driver true` (ver abajo) |
 | `uv.lock` | Upstream lo marca `-merge`: siempre conflictúa, a propósito | **Regenerar**, no resolver, y **partiendo del lock de upstream** (`git checkout <tag> -- uv.lock`) para heredar sus versiones: `uv tool run uv@<version-que-pinea-el-Dockerfile> lock` |
 | `0052_drop_sales_constraints.py` | Único cambio nuestro con lógica propia | **Revisar a mano** si upstream tocó esa migración. Es el único que merece atención real |
+
+> **Nota (2026-09-26):** la medición real contra `3.23.36` (ver "Medición del salto 3.22 → 3.23" más abajo) encontró conflictos distintos de los previstos aquí: los 3 atribuibles al fork fueron `.env.example`, `Dockerfile` y `.github/workflows/test-env-cleanup-cron.yml` — no `AGENTS.md` —que sí difiere mucho de upstream (+70/−418 líneas contra `3.23.36`), así que su ausencia se atribuye al `merge=ours` de `.gitattributes`, **sin haberlo confirmado**— ni `0052_drop_sales_constraints.py` (esa migración cambió en upstream, pero solo en 3.23 — ver "Pendiente de upstream"). Útil como intuición inicial; la medición manda.
+
+## Medición del salto 3.22 → 3.23 (2026-09-26, reporte B-578)
+
+Complementa la remedición del 2026-08-24 (arriba): aquella medía ~20 líneas de código de Saleor
+contra `3.22.67` y excluía configuración; esta mide el **payload completo a reaplicar** contra
+`3.22.71`, contrastado con `3.23.36` — por eso las cifras difieren entre ambas.
+
+### El estado de soporte de upstream — el dato que fija el plazo
+
+- `SECURITY.md` de upstream, tabla textual: `≥ 3.22` soportada, `< 3.22` no. → **3.22 es la línea
+  más antigua todavía soportada.**
+- Historial del archivo: *"Remove 3.20 from supported versions"* el 2026-04-17; **"Remove 3.21 from
+  supported versions" el 2026-09-23** (diff verificado: `≥ 3.21` → `≥ 3.22`).
+- **Matiz que importa:** la retirada de 3.21 **no coincidió con el lanzamiento de ninguna línea
+  nueva** (3.24 no existe: rama 404, sin releases ni tags). Cuando salió 3.23.0 la tabla pasó a
+  `≥3.21` = 3 líneas soportadas; el 2026-09-23 pasó a `≥3.22` = **2 líneas**. Upstream **recortó la
+  ventana de soporte de 3 líneas a 2**, por decisión propia y sin aviso.
+- Ritual de retirada observado: sale de `SECURITY.md` → una release final → **la rama se borra**
+  (`3.19`, `3.20`, `3.21` → las tres dan 404 hoy).
+- **3.22 está plenamente viva hoy:** `3.22.71` publicada 2026-09-24T09:06:08Z y `3.23.36`
+  2026-09-24T09:06:43Z → **35 segundos de diferencia**. Cadencia de 3.22 en 90 días: 18 releases,
+  una cada ~5 días, hueco máximo 13 días.
+- **Cero CVEs sin parchear**: los 16 advisories del repo upstream revisados uno a uno; todos con
+  parche en una `3.22.x` por debajo de 3.22.71. **Ningún fix de seguridad existe solo en 3.23+.**
+- Eje 2 (rezago de línea menor) = **170 días exactos**: `3.23.0` se publicó el 2026-04-09.
+- `upstream/main` está en `3.24.0-a.0` desde el 2026-03-25 (185 días de gestación). Cadencia
+  histórica de minors: 313 / 142 / 181 días. **Dispersión demasiado ancha para predecir una
+  fecha — no la inventes.**
+- **Conclusión de plazo:** el plazo no es una fecha, es un **evento** — la publicación de Saleor
+  3.24.0. Ese día 3.22 pasa a estar dos líneas por detrás y la garantía de backport de upstream
+  (*"Saleor backports most of patches to at least one version behind"*, nota de release de 3.23.0)
+  deja de cubrirla.
+
+### El coste, medido
+
+- Divergencia real a reaplicar: **+84 / −13 líneas** (`Dockerfile`, `manage.py`, `pyproject.toml`,
+  `.env.example`, `.gitattributes`, `.gitignore`, `saleor/asgi/__init__.py` y
+  `saleor/celeryconf.py`), más 18 archivos propios que upstream no tiene y **no pueden
+  conflictuar**.
+- **No hay personalizaciones de negocio en el fork**: Wompi, COP e impuestos viven en
+  `saleor-apps/`, fuera de este repo.
+- **Conflictos medidos en memoria** con `git merge-tree --write-tree` (no toca el árbol), usando un
+  control que aísla nuestra contribución:
+  - `3.23.36` × nuestro fork (`origin/stable/3.22`) → **210 conflictos**
+  - `3.23.36` × upstream puro (`3.22.71`, sin fork) → **208 conflictos**
+  - → **solo 3 son atribuibles al fork**: `.env.example`, `Dockerfile` y
+    `.github/workflows/test-env-cleanup-cron.yml`
+  - 124 de los 210 están en `saleor/graphql`, con base de fusión de 2025-10-01: son divergencia
+    **entre dos líneas de release**, no entre upstream y nosotros.
+  - **Esto confirma la estrategia A (re-fork) y descarta la B (merge) con números**: los 208
+    conflictos inherentes tienen todos la misma resolución correcta ("tomar 3.23"), así que
+    resolverlos a mano sería ruido puro con riesgo de error humano.
+- **Migraciones:** 65 reales, en 12 apps. Las **3 destructivas usan `SeparateDatabaseAndState`** →
+  en 3.23 no borran nada en BD, solo sueltan FKs; el borrado real está **diferido a 3.24**
+  (comentario literal en `product/0204`: *"Will be dropped from the actual DB in Saleor v3.24.0"*).
+  10 índices concurrentes con el patrón correcto. **Sin migraciones propias del fork** → cero
+  colisión de numeración.
+- **11 backfills se delegan a Celery** vía `post_migrate` → `.delay()`. **Riesgo principal del
+  salto:** el `migrate` termina en segundos y *parece* completo, pero el trabajo real lo hace el
+  worker después; si el worker no está arriba **con sus colas**, los datos quedan incompletos
+  **sin un solo error**. → El criterio de aceptación **no puede ser "migrate terminó"**: tiene que
+  ser una consulta por backfill (filas con el campo destino nulo = 0) después de que el worker
+  drene.
+- **Esquema GraphQL:** +5525 / −3820 líneas; 1428 → 1476 definiciones top-level. Lo eliminado son
+  dos familias **ya deprecadas en 3.22**: `DigitalContent*` y `AppExtension*` legacy.
+- **Los tres consumidores cruzados contra el delta por intersección de conjuntos: cero roturas.**
+  `storefront` (14 operaciones), `saleor-apps` (7 webhooks con `subscriptionQuery` +
+  `transactionEventReport`) y `scripts/seed/seed.py` (33 campos, el mayor del monorepo).
+  Verificados idénticos en ambos tags los dos puntos de mayor riesgo:
+  `ShippingListMethodsForCheckout` y la firma de `transactionEventReport`. Ambos manifiestos de
+  app declaran `extensions: []`, así que la remoción de `AppExtension` no toca nada.
+- **Runtime sin cambios:** `requires-python >=3.12,<3.13` y `django[bcrypt]~=5.2.17` idénticos en
+  ambos tags. No hay que tocar el toolchain.
+
+### Deuda del storefront: qué se puede adelantar y qué no
+
+Verificado con `git show <tag>:saleor/graphql/schema.graphql` sobre el `type Checkout`:
+
+- `shippingMethods` **ya existe en 3.22.71** (y `availableShippingMethods` ya está deprecado ahí).
+  → **la migración `availableShippingMethods` → `shippingMethods` se puede hacer HOY sobre 3.22**,
+  desacoplada del salto.
+- `delivery` **NO existe en 3.22.71**; aparece solo en 3.23.36, que a su vez deprecia
+  `deliveryMethod` en favor de `delivery`. → **`deliveryMethod` → `delivery` NO se puede adelantar:
+  rompería producción.** Es trabajo post-salto.
+- 3.23 no rompe ninguna de las dos. **Las rompe 3.24.**
+
+### Lo que NO está medido (no estimarlo)
+
+- Duración real de las migraciones: falta el conteo de filas de las tablas con backfill (Postgres
+  local y Railway estaban apagados durante la medición).
+- Variables de entorno reales de producción: no se pudo confirmar si algún plugin retirado en 3.23
+  está activo.
+- El cambio de "media por URL externa" a asíncrono (devuelve 503 mientras procesa): no probado
+  contra `scripts/seed/seed.py`.
+- **Estas tres son precondiciones del plan de ejecución, no notas al pie**: sin ellas no hay
+  ventana de mantenimiento que proponer.
+
+### Punto ciego de instrumentación
+
+Hoy **nada alarma por el eje 2**: `scripts/distancia-upstream/distancia.py` reporta el eje 2 pero
+**por diseño no afecta su código de salida**, y el único aviso es el issue automático
+`upstream-minor` del fork, abierto desde 2026-08-23 y con el contenido ya rancio (dice "3.23.28"
+cuando hoy es 3.23.36). El evento que de verdad importa — que **3.22 salga de `SECURITY.md`**, que
+**aparezca la rama/tag `3.24`**, o que **se borre la rama `3.22`** — no lo vigila nadie.
 
 ---
 
