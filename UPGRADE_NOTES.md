@@ -718,6 +718,29 @@ GraphQL**, no en este fork.
 
 ## Cómo hacer una actualización
 
+### Cómo se detecta que el fork va por detrás
+
+La medida que responde "¿va el fork por detrás de upstream?" es
+`scripts/distancia-upstream/distancia.py`, y **no vive en este fork**: está con sus tests y su README
+en el repo raíz privado `aclicona/licona-ecommerce`. Dos razones: un solo dueño del guion (dos copias
+derivan en silencio) y que **este repo es público**, así que ejecutarlo aquí exigiría guardar un PAT
+del repo privado como secreto en un repo público. Corre desde el 2026-09-25 (B-517) vía
+`.github/workflows/distancia-upstream.yml` **del repo raíz**: `cron: '0 9 * * 4'` (jueves 09:00 UTC)
+más ejecución manual. Contrato de salida, el mismo de los guiones de `scripts/`: **0** = al día ·
+**1** = retraso sobre el umbral (14 días por defecto) · **2** = **no se pudo medir**, que no es
+"está atrasado".
+
+⚠️ **Precondición: los tags de upstream.** `distancia.py` mide la versión del fork con `git describe`
+sobre el clon que le pasen y **no hace fetch** — por eso el workflow del repo raíz trae
+`refs/tags/3.22.*` de `upstream` a propósito. Contra un clon sin esos tags **miente**: en el checkout
+local (14 commits por detrás de `origin/stable/3.22`) reporta 25 días de retraso cuando el real es 0.
+
+Estado hoy: **0 días de retraso**, sincronizado a `3.22.71` el 2026-09-25 (B-516). **Ninguna corrida
+programada ha ocurrido todavía**: los tres runs existentes son manuales y la primera por cron es el
+jueves 2026-10-01. El sync semanal de abajo no sustituye esta medida: 5 corridas con éxito seguidas,
+pero sus PR estuvieron 3-4 semanas sin atender y se cerraron sin mergear — detector sin actuador
+(B-566).
+
 ### Requisito de una sola vez, en cada clone nuevo
 
 ```sh
