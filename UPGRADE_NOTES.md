@@ -629,6 +629,183 @@ qué chocar. En un re-fork limpio se copian con el resto de `scripts/`.
 
 ---
 
+### 2026-09-26 — Guion de los cuatro ajustes de GitHub que no se clonan (base: 3.22.71)
+
+**Archivos añadidos:**
+
+- `scripts/check-github-settings.sh` — **nuevo, sin equivalente en upstream.** Cuarto hermano de
+  `check-migrations.sh`, `check-schema-fidelity.sh` y `check-branch-protection.sh`: misma pregunta
+  de fondo (¿el estado externo sigue diciendo lo que el fork afirma?), mismo contrato de tres
+  códigos, mismo compromiso de **no mutar nada** —solo `GET`, **ninguna llamada suya usa `-X`**—.
+  Cubre los cuatro ajustes que la REGLA DEL FORK del 2026-09-03 enumera como «no se clonan» y que
+  `check-branch-protection.sh` dejó fuera: workflows deshabilitados, *Workflow permissions*,
+  aprobación de workflows en PR de fork y secrets. Parametrizable igual que su hermano
+  —`REPO="${REPO:-aclicona/licona-saleor}"`—, para que la réplica de un cliente se verifique sin
+  editar el guion: `REPO=cliente/su-saleor sh scripts/check-github-settings.sh`. `sh` POSIX puro,
+  sin `set -e`, con el `--jq` **embebido de `gh`** (no añade dependencia de un `jq` externo).
+  Contrato de salida: **0** = los dos ajustes con gate coinciden · **1** = deriva real en alguno de
+  esos dos · **2** = **no se pudo responder** (no hay `gh`, no hay sesión autenticada, el repo no
+  existe, el token no tiene permiso, o la respuesta de la API es ilegible o incompleta).
+
+  **Aquí NO hay 404 ambiguo, y es exactamente lo contrario de su hermano — leer esto antes de
+  copiar el mecanismo de `.protected`.** `check-branch-protection.sh` necesitó un desempate
+  —consultar `/branches/<rama>` y usar `.protected`— porque
+  `GET /branches/{rama}/protection` devuelve **404, no 403**, cuando falta el permiso de admin, y
+  ese 404 se confunde con «la rama no está protegida». **En este guion ese problema no existe, y se
+  midió para saberlo:** con un token sin `admin`, los tres endpoints con permiso restringido
+  responden **403 limpio** —comprobado contra `saleor/saleor`, `cli/cli` y `microsoft/vscode`—,
+  nunca un 404 confundible con «no está configurado». **Consecuencia de diseño: la única vía a
+  exit 1 es un `200` con un valor distinto del esperado, y todo fallo de llamada —403, 404, 5xx,
+  salida ilegible— es exit 2, sin desempate y sin heurística.** No replicar aquí el mecanismo de
+  `.protected` por analogía con B-548: sería complejidad sin causa, y una heurística de más es una
+  vía de más a un veredicto equivocado.
+
+  **Asimetría de permisos, medida:** `GET /actions/workflows` **no exige admin** —funciona en la
+  réplica de un cliente aunque el operador no lo sea—; los otros tres sí. Es el único de los cuatro
+  que una réplica puede verificar sin privilegios, y por eso su afirmación es la que de verdad
+  viaja.
+
+  **GOTCHA con dientes — `/actions/workflows` devuelve 24 entradas para 23 archivos.** La extra es
+  `dynamic/dependabot/update-graph` (`Dependency Graph`): un pseudo-workflow **sin archivo en el
+  árbol**, que GitHub registra por su cuenta. Sin filtrar por `path` que empiece por
+  `.github/workflows/`, el guion fabrica una deriva falsa **el día uno**. Con el filtro puesto, el
+  cruce contra el árbol da **cero delta** en este fork.
+
+  **Y al revés: `state: active` NO implica que el archivo exista.** En `saleor/saleor` hay **cuatro
+  workflows en `active` cuyo archivo está borrado**, uno desde **2024-09-13**: GitHub **nunca** los
+  transiciona a `deleted`. Por eso el cruce se hace en **las dos direcciones** —registro sin archivo
+  y archivo sin registro—, no solo en la que parece obvia. Este fork ya conocía la cara opuesta:
+  `tests-and-linters.yml` está en `deleted` con el archivo presente en el árbol.
+
+  **El enum de `state` tiene CINCO valores, no dos**, verificado contra
+  `github/rest-api-description`: `active`, `deleted`, `disabled_fork`, `disabled_inactivity` y
+  `disabled_manually`. En vivo solo se han observado `active` y `disabled_manually`. Los otros tres
+  se tratan igual —cualquier cosa que no sea `active` en uno de los tres propios es deriva— para no
+  quedarse corto el día que aparezca `disabled_inactivity`, que GitHub aplica **solo**, sin que
+  nadie toque nada.
+
+  **El manejo de errores no se puede derivar de la especificación.** El OpenAPI declara **solo
+  `200`** para `actions/permissions/workflow`, `actions/secrets` y `actions/workflows`, y los tres
+  devuelven **403 real** cuando falta permiso. `fork-pr-contributor-approval` es el **único** con un
+  `404` documentado en el OpenAPI, y **no se pudo provocar** en ninguna medición; se mapea a 2, que
+  es la respuesta conservadora. Dicho de otro modo: los códigos que este guion trata son los
+  **medidos**, no los publicados.
+
+- `saleor/tests/test_fork_github_settings_drift.py` — **nuevo, sin equivalente en upstream.** Mismo
+  patrón que `test_celery_queues_drift` y `test_fork_branch_protection_drift`: compara dos fuentes
+  que **tienen que** decir lo mismo y se pone rojo el día que se separan. Sostiene la parte del
+  contrato que **el árbol sí puede afirmar** y la API no debería. Cinco tests sobre las dos
+  constantes del guion, `WORKFLOWS_PROPIOS` y `SECRETS_ESPERADOS`:
+
+  1. Cada ruta de `WORKFLOWS_PROPIOS` **existe** como archivo. Es el isomorfo exacto del fallo que
+     B-548 vigila con el `name:` del job `puerta`: si alguien borra un workflow del árbol y no toca
+     la constante, el guion exigiría para siempre el `active` de un archivo inexistente — un exit 1
+     inarreglable.
+  2. Cada uno de esos workflows **declara su bloque `permissions:`** (a nivel raíz o en todos sus
+     jobs). **Es el test más valioso de los cinco**, porque nada más en la CI protege ese bloque:
+     borrarlo devuelve el workflow al ajuste no versionado **en silencio**, que es el fallo entero
+     que el comentario de `ci-fork.yml` fue escrito para prevenir — y ese comentario sobreviviría
+     intacto al cambio que lo invalida.
+  3. Todo `${{ secrets.X }}` con `X` distinto de `GITHUB_TOKEN` en un workflow propio está en
+     `SECRETS_ESPERADOS` (hoy: conjunto vacío). Esta es la afirmación verificable que está **detrás**
+     del `total_count == 0` de secrets, y la razón de que ese endpoint se quede en informativo: lo
+     que importa no es cuántos secrets haya puestos, sino que el árbol no necesite ninguno. Recorre
+     el **YAML cargado, no un regex sobre el texto crudo** — `ci-fork.yml` nombra
+     `secrets.GITHUB_TOKEN` dentro de un **comentario**, y un regex lo leería como uso real. El
+     falso positivo está demostrado en las dos direcciones en la verificación del turno.
+  4. Ninguna entrada esperada cae fuera de `.github/workflows/`, que blinda el gotcha de la entrada
+     sintética `dynamic/dependabot/update-graph`.
+  5. Guarda mínima, espejo de `test_guion_y_job_existen`: el guion existe y sus dos constantes se
+     leen y no están vacías. Distingue «falta la pieza» de «las dos fuentes se separaron».
+
+  **Lo que este test deliberadamente NO afirma, y conviene saberlo:** la dirección inversa —que todo
+  workflow del árbol esté en `WORKFLOWS_PROPIOS`—. No hay en el árbol un discriminador fiable entre
+  «propio del fork» y «heredado de upstream», y el de `git log` no sirve porque los tres jobs de
+  `ci-fork.yml` usan `actions/checkout@v5` **sin `fetch-depth`**, o sea profundidad 1. Queda escrito
+  en el docstring en vez de inventar un marcador nuevo. Vive en `saleor/tests/` porque `setup.cfg` fija
+  `testpaths = saleor` —un archivo fuera de `saleor/` no lo recogería ni un `pytest` sin argumentos
+  ni el job `suite` de `ci-fork.yml`—. **No usa base de datos**: solo lee archivos de texto, así que
+  no pide la fixture `db` ni `@pytest.mark.django_db`.
+
+**Motivo (por qué, no solo qué):** el 2026-09-25 `check-branch-protection.sh` convirtió **uno** de
+los cinco ajustes no versionables que enumera la REGLA DEL FORK —la protección de rama— de supuesto
+en afirmación verificable. Los otros cuatro seguían exactamente igual que antes: rompen lejos,
+mienten cerca, y no había nada en el árbol que avisara. El modo de fallo de *Workflow permissions*
+ya estaba **documentado y medido** en este repo desde agosto: `ci-fork.yml` lleva un bloque
+`permissions:` explícito **precisamente porque** el ajuste de repo no viaja, y en una réplica sin él
+`actions/upload-artifact` fallaría con 403 y tumbaría el job `suite` **entero** — un run donde los
+17k tests pasaron se vería como suite fallida. Lo que faltaba no era saber cómo se rompe: era que
+alguien lo preguntara. Este guion es además la **lista de verificación ejecutable al replicar el
+fork para un cliente**, que hasta hoy no existía en ninguna parte, ni siquiera en prosa.
+
+**Contrato del guion** (valores medidos el 2026-09-26 por dos frentes independientes, que
+coincidieron):
+
+| Ajuste | Endpoint (`GET`) | ¿Exit 1? | Qué afirma · consecuencia medida |
+|---|---|---|---|
+| Workflows deshabilitados | `/actions/workflows` | **SÍ** | Los tres propios (`ci-fork.yml`, `sync-upstream.yml`, `security-scan.yml`) en `active`, y ninguno de los 23 del árbol deshabilitado. Uno de los tres en `disabled_*`: la verificación del sync o la suite dejan de correr **sin ningún error**, igual que ya pasa con el `deleted` de `tests-and-linters.yml` |
+| *Workflow permissions* | `/actions/permissions/workflow` | **SÍ** | `default_workflow_permissions == "read"`. En `write`, el repo concede a todo workflow sin bloque `permissions:` mucho más de lo que necesita — incluidas las maquinarias de upstream que el fork no usa |
+| Aprobación de PR de fork | `/actions/permissions/fork-pr-contributor-approval` | NO | Solo imprime `approval_policy`. Sin consecuencia medible en este fork: cero secrets, despliegue por push directo, y el único autor automático de PRs es `GITHUB_TOKEN`, al que la política **no gatea en ninguno de sus tres valores** |
+| Secrets | `/actions/secrets` | NO | Solo lista nombres y `total_count`. Un `total_count` mayor que cero es **información** («hay secrets de más»), no avería: afirmarlo degradaría el significado del verde |
+
+**El guion nace en exit 1 sobre este repo, y es A PROPÓSITO. No lo "arregles" cambiando el esperado
+a `write`.** El valor medido hoy en `aclicona/licona-saleor` es `default_workflow_permissions=write`,
+así que la primera corrida sale en **1**. Eso no es un bug del guion ni un falso positivo: es la
+deriva que el guion existe para delatar, y se cierra con **un toggle en la UI de GitHub**, no
+editando la constante. Ruling de Fable del 2026-09-26, literal:
+
+> El contrato tiene que decir lo que el fork **necesita**, no lo que **tiene**: los tres workflows
+> propios llevan `permissions:` explícito y son inmunes, así que el fork no necesita `write`, y una
+> réplica de cliente que nazca en el default de GitHub (`read`) **debe salir verde**, que es
+> justamente el caso de uso del guion. El rojo de hoy en este repo es deriva real y accionable (un
+> toggle), no un falso positivo; las dos maquinarias de upstream que dejarían de funcionar en `read`
+> (`bump-dependencies.yml`, `create-tag-with-release-pr.yml`) no las usa el fork, y que dejen de
+> disparar con permisos que nadie les concedió es consecuencia deseable, no avería.
+
+La inmunidad de los tres workflows propios está **medida**, no supuesta: `ci-fork.yml:26-28`,
+`sync-upstream.yml:47-61` y `:557-559`, y `security-scan.yml:12-14` declaran su `permissions:` por
+job, así que el ajuste de repo no los alcanza. En el mismo turno se corrigió la REGLA DEL FORK en
+`memory/saleor-api/README.md` para que fije `read` en vez de limitarse a nombrar el ajuste: la regla
+y el guion no pueden contradecirse. **No es el mismo commit** porque `memory/` vive en el repo raíz
+de `ecommerce`, no en este; sí es el mismo turno.
+
+**Los otros valores medidos**, que el guion imprime sin afirmar: `can_approve_pull_request_reviews`
+= `true`, `approval_policy` = `first_time_contributors`, secrets `total_count` = `0`, y 24 workflows
+en `active`. `can_approve_pull_request_reviews` merece un párrafo propio aunque no se afirme: en
+`false` **rompe el `gh pr create` de `sync-upstream.yml` en el último paso**, con la rama ya empujada
+y la suite ya disparada. El sync se queda sin PR, invisible para quien solo mira PRs abiertos, y se
+repite igual **cada lunes**. Se imprime para que quien lea la salida lo vea; no se afirma porque su
+valor por defecto no es el que el fork necesita en todas las réplicas.
+
+**Desempate descartado por medición, para que nadie lo reintente.** Se consideró inferir la política
+de PR de fork desde `/actions/runs?status=action_required` cruzado con `head_repository.fork`. **No
+sirve:** `head_repository.fork` es `true` para **cualquier** rama de un repo que *sea* fork, y los 8
+runs en `action_required` de este fork tienen `head_repository == repository` —son PRs del mismo
+repo—. La causa real de esos runs es la salvaguarda antibucle del `GITHUB_TOKEN` que `ci-fork.yml`
+ya documenta, no la política de aprobación. La señal no discrimina; por eso ese ajuste se queda en
+informativo y no en afirmación.
+
+**Límite de esa afirmación:** el guion pone en rojo **dos** ajustes y solo dos. Los otros dos se
+imprimen, y un exit 0 **no afirma nada** sobre ellos: un repo con `approval_policy` restrictiva, con
+secrets de sobra o con `can_approve_pull_request_reviews` en `false` pasa en verde. Tampoco afirma
+nada sobre los ajustes de GitHub que ninguno de los cuatro endpoints cubre (Dependabot, entornos,
+reglas de merge). El verde de este guion significa «los dos ajustes que rompen la CI en silencio
+están bien», no «el repo está bien configurado».
+
+**No se tocó la configuración real de GitHub.** Todas las mediciones son `GET`. El
+`default_workflow_permissions=write` de hoy se deja **tal cual**: cambiarlo es una decisión de
+consola que le corresponde a Andrés, y el guion ya la delata cada vez que corre.
+
+**Conflicto potencial al actualizar upstream:** **ninguno.** Ninguno de los dos archivos existe en
+upstream y ninguno toca un archivo de upstream —el test es un archivo nuevo con nombre propio
+(`test_fork_*`) dentro de un directorio que ya existía—, así que no hay nada del otro lado con qué
+chocar. En un re-fork limpio se copian con el resto de `scripts/`. Lo que **sí** puede cambiar con
+un sync es el **conteo de 23 workflows** del árbol: un workflow nuevo de upstream lo mueve, y el
+cruce en las dos direcciones lo delata como deriva. Es el comportamiento deseado —hay que mirarlo—,
+no una avería del guion.
+
+---
+
 ## Pendiente de upstream
 
 | Tema | Estado a fecha 2026-09-26 (3.22.71 / 3.23.36) |
