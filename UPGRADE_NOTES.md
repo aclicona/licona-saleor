@@ -999,6 +999,74 @@ cuando hoy es 3.23.36). El evento que de verdad importa — que **3.22 salga de 
 
 ---
 
+## Decisión: el salto 3.22 → 3.23 está autorizado (2026-09-26, reporte B-584)
+
+El dueño del repo autorizó el salto el **2026-09-26**, sobre la medición de la sección anterior.
+Queda escrito aquí, y no solo en el backlog, porque quien mantenga el fork tiene que poder leer el
+alcance de la autorización sin abrir otra herramienta.
+
+**Qué se autorizó:**
+
+- El salto **3.22 → 3.23**, por **estrategia A (re-fork limpio)** — la medición de conflictos de la
+  sección anterior la confirma y descarta la B: de los 210 conflictos contra el fork **solo 3 son
+  atribuibles a él** (el control contra upstream puro da 208). El resto es divergencia entre dos
+  líneas de release, y toda ella tiene la misma resolución correcta: tomar 3.23.
+- Ejecutado **por partes**, no en un solo paso.
+- **Verificado en local antes de cualquier despliegue.**
+
+**Qué NO autoriza:**
+
+- **No autoriza tocar producción.** El despliegue es la parte 4/4 y **exige una ventana declarada en
+  el reporte B-523**. Nada de lo autorizado aquí habilita un deploy.
+- **El salto directo a 3.24 se evaluó y se descartó.** Habría significado estrenar una línea recién
+  publicada acumulando dos saltos de minor y los borrados destructivos —los que 3.23 difiere vía
+  `SeparateDatabaseAndState`— en un único despliegue.
+
+### El plan, en cuatro partes
+
+| Parte | Reporte | Qué cierra |
+|---|---|---|
+| 1/4 | **B-584** | Esta decisión: la autorización y su alcance, por escrito |
+| 2/4 | **B-588** | Rama `stable/3.23` por estrategia A (re-fork), verificada en local |
+| 3/4 | — | `storefront` contra el esquema nuevo (`codegen` + `deliveryMethod` → `delivery`) y smoke de `saleor-apps` (7 webhooks + `transactionEventReport`) |
+| 4/4 | **B-523** | Re-apuntado de las 6 referencias, rama por defecto de GitHub, cierre del issue #1, y el despliegue con su ventana declarada |
+
+Reportes independientes, que no bloquean el salto: **B-585** (deuda del storefront, adelantable
+sobre 3.22), **B-586** (detector del eje 2), **B-587** (precondiciones medibles).
+
+### La precondición que sigue sin cumplirse
+
+Las cifras de **B-587** no existen todavía, y sin ellas **no hay ventana de mantenimiento que
+proponer**:
+
+- **Conteo de filas** de las tablas con backfill.
+- **Duración real de las migraciones**, medida, no estimada.
+- **Verificación en la base de datos** de que los constraints de `discount/0052` ya se soltaron.
+  Upstream modificó esa migración **in-place**, y **Django no reejecuta una migración ya aplicada**:
+  que el archivo nuevo haga lo correcto no dice nada sobre una instancia que ya la corrió. Hay que
+  consultar el estado real de los constraints en la BD, no leer el archivo.
+
+### El riesgo que se olvida: los backfills diferidos a Celery
+
+Está medido arriba y se repite aquí porque es el que se pasa por alto al ejecutar: **11 de las 65
+migraciones delegan su backfill a Celery** (`post_migrate` → `.delay()`). El `migrate` termina en
+segundos y *parece* completo, pero el trabajo real lo hace el worker después. Si el worker no está
+arriba **con sus colas**, los datos quedan incompletos **sin un solo error**.
+
+→ El criterio de aceptación **no puede ser «migrate terminó»**: tiene que ser **una consulta por
+backfill, después de drenar la cola**.
+
+### El tag objetivo se elige en el momento de ejecutar
+
+Hoy el candidato es **`3.23.36`**, que es contra el que se midió todo. Si al ejecutar la parte 2/4
+el tag estable más reciente es otro, **hay que re-ejecutar el cruce de los tres consumidores contra
+ese tag**: el resultado "cero roturas" está atado a `3.23.36`, no a la línea 3.23 en general.
+
+El plazo sigue siendo **un evento, no una fecha**: la publicación de Saleor 3.24.0 (ver la sección
+anterior).
+
+---
+
 ## Cómo hacer una actualización
 
 ### Cómo se detecta que el fork va por detrás
@@ -1048,6 +1116,10 @@ config no se versiona. `sync-upstream.yml` lo ejecuta solo; los clones locales n
 7. Anotar la versión nueva en el historial de abajo.
 
 ### Salto de minor (3.22 → 3.23)
+
+> **Autorizado el 2026-09-26 (reporte B-584).** El alcance exacto de esa autorización —y lo que
+> **no** cubre, en particular el despliegue— está en "Decisión: el salto 3.22 → 3.23 está
+> autorizado" más arriba. Leerlo antes de empezar.
 
 **Primero hay que estar al día dentro de la minor actual.** No se salta desde un punto
 atrasado: se resuelve el sync de parches, se verifica, y recién ahí se sube de minor.
