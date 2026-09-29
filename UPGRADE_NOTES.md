@@ -8,7 +8,84 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## Re-fork sobre 3.23.36 (2026-09-29, reporte B-588)
+
+Parte 2/4 del salto autorizado en B-584. La rama `stable/3.23` nace **del tag `3.23.36`** (estrategia A,
+re-fork limpio), no de `stable/3.22`; el payload del fork se reaplicó encima. Verificado solo en local:
+**no se ha desplegado nada** (eso es B-523, parte 4/4).
+
+**Base:** tag `3.23.36` (`44dd076f00`). El tip de `upstream/3.23` va un commit por delante
+(`e77fd1f2f2`, `ci: replace path filters in tests and e2e...`, solo workflows de CI de upstream): no se
+incorporó porque la regla es partir del tag estable.
+
+**Delta del fork medido** (`git diff 3.22.71 origin/stable/3.22`; `3.22.71` es el merge-base con
+upstream) y qué se hizo con cada pieza:
+
+| Pieza | Clase | Tratamiento |
+|---|---|---|
+| `Dockerfile`, `manage.py`, `pyproject.toml`, `.env.example`, `.gitattributes`, `.gitignore`, `saleor/asgi/__init__.py`, `saleor/celeryconf.py`, `uv.lock` | payload | reaplicado con `git apply -3` sobre 3.23.36 (+85/−13 líneas de código y config, tras el `uv.lock`) |
+| `railway.json`, `scripts/{check-branch-protection,check-github-settings,check-migrations,check-schema-fidelity,railway-entrypoint,wait-for-db}.sh`, `.github/workflows/{ci-fork,security-scan,sync-upstream}.yml`, `UPGRADE_NOTES.md`, `docs/superpowers/plans/*`, `saleor/tests/test_fork_*_drift.py` | propio | copiado de `origin/stable/3.22` |
+| `AGENTS.md` | propio (reemplaza el de upstream) | se conserva el del fork, como con el `merge=ours` de siempre; upstream 3.23 trae su propio `AGENTS.md` (+122 líneas) que se descarta |
+| `saleor/discount/migrations/0052_drop_sales_constraints.py` | parche descartado | se queda la versión de upstream 3.23.36 (ver abajo) |
+| `.github/workflows/test-env-cleanup-cron.yml` | borrado deliberado del fork (2026-09-03) | borrado de nuevo en el árbol |
+| `.github/workflows/changelog-check.yml`, `.../graphql-inspector.yml` | no eran cambios nuestros: copias rancias de upstream que el sync no actualizaba (`.github/workflows/` del fork no sigue a upstream) | se toma la versión de upstream 3.23.36 (el pin `3.22:` del inspector desaparece: 3.23 usa `base.sha`) |
+
+No apareció lógica de negocio fuera de lo descrito.
+
+**Los tres conflictos previstos (B-578) y su resolución real:**
+
+1. `.env.example`: al partir de 3.23.36 no chocó (upstream no lo tocó entre 3.22.71 y 3.23.36); el
+   payload se aplicó limpio. El conflicto medido venía del merge, no del re-fork.
+2. `Dockerfile`: upstream 3.23 cambió el `CMD` (`--lifespan=off` → `--lifespan=auto`). Se conserva
+   **`--lifespan=auto` de upstream** sobre nuestro `ENTRYPOINT` de Railway y el `CMD` con `--host=::`
+   y `--port=${PORT:-8000}`. Ojo: es un cambio de comportamiento heredado respecto a 3.22.
+3. `.github/workflows/test-env-cleanup-cron.yml`: upstream lo conserva; nosotros lo retiramos el
+   2026-09-03. Se borra del árbol (no se deshabilita por UI).
+
+Conflictos adicionales no previstos, ambos triviales: `.gitignore` (upstream tocó `.claude` y añadió
+`!.semgrep/`: se conserva lo de upstream y se añaden nuestras 2 entradas) y `saleor/asgi/__init__.py`
+(upstream importa ahora `settings` para `usage_telemetry_middleware`: conviven ambos imports;
+`load_dotenv()` sigue antes de leer `settings.SEND_USAGE_TELEMETRY`, así que un `.env` con esa variable se respeta).
+
+**`discount/0052`:** el parche del fork (tragarse cualquier excepción) se **descarta** y queda el de
+upstream (commit `f47392d874`, fix in-place, solo FK/UNIQUE). **Precondición abierta, que no cubre este
+reporte y sigue en B-633:** Django no reejecuta una migración ya aplicada, así que hay que comprobar en
+la **BD real** (no en el archivo) que los constraints objetivo ya se soltaron antes de desplegar.
+
+**`uv.lock`:** se parte del lock de upstream 3.23.36 y solo cambia por nuestra dependencia directa
+`python-dotenv`: **+2 líneas** (`uv tool run uv@0.12.1 lock`, la versión que pinea el `Dockerfile`).
+`uv lock --check` con esa versión: verde.
+
+**Tag de archivo:** `archive/stable-3.22-fork` (anotado, local, sin empujar) apunta a
+`origin/stable/3.22` (`21ee0a61c4`), el último estado del fork en 3.22.
+
+**Verificación local (2026-09-29, venv desechable con las deps de 3.23.36, Postgres 16 desechable):**
+
+| Comprobación | Resultado |
+|---|---|
+| `manage.py check` | 0 issues |
+| `makemigrations --check --dry-run` | `No changes detected` |
+| `check-migrations.sh` sobre BD vacía → tras `migrate` | exit 1 (todas pendientes) → exit 0 (`migrate` completo en 36 s, incluida `discount.0052` sobre PG 16) |
+| `check-migrations.sh` contra la BD local de Andrés (solo lectura) | exit 1: **65 pendientes**, las 65 medidas en B-578; no se migró |
+| `check-schema-fidelity.sh` | exit 0, `schema.graphql` fiel byte a byte |
+| `ruff check .` / `ruff format --check .` (excluye `.semgrep/`, como el pre-commit) | limpio |
+| `pytest -m "not e2e" -n 12` | 17 859 passed, 1 skipped, **2 failed** en 167 s |
+
+Los 2 fallos (`test_http_client.py::test_http_client_disallows_private_ip_ranges[http|https]`)
+**se reproducen idénticos en 3.23.36 puro**: dependen de red saliente del entorno, no del payload.
+El tag puro recoge 17 855 tests; los 7 restantes son los dos tests de deriva del fork (verdes).
+
+**Pendiente del cierre del salto (B-523, no hecho aquí):** apuntar `sync-upstream.yml` a `stable/3.23`,
+cambiar la rama por defecto del repo y cerrar el issue `upstream-minor`. Los textos de este archivo que
+dicen `3.22` describen la línea anterior y se actualizan en B-523.
+
+---
+
 ## Cambios aplicados
+
+> Estado autoritativo en `stable/3.23`: las entradas de abajo son la historia de cada parche. Contra
+> 3.23.36 siguen vigentes todas **excepto** el fix de `discount.0052` (2026-04-17), descartado a favor
+> del de upstream, y el `build-image.yml` ya retirado.
 
 ### 2026-04-16 — Setup inicial Railway (base: 3.22.48)
 
