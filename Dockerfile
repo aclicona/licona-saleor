@@ -12,17 +12,15 @@ WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:0.12.1@sha256:cf4eedcaa81655197f625739489effcbe71b61ceb1506f332c3facae5deceded \
   /uv /uvx /bin/
 ENV UV_COMPILE_BYTECODE=1 UV_SYSTEM_PYTHON=1 UV_PROJECT_ENVIRONMENT=/usr/local
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --locked --no-install-project --no-editable
+COPY uv.lock pyproject.toml ./
+RUN uv sync --locked --no-install-project --no-editable
 
 ### Final image
 FROM python:3.12-slim
 
 RUN groupadd -r saleor && useradd -r -g saleor saleor
 
-# Pillow dependencies
+# Pillow dependencies + netcat for wait-for-db script
 RUN apt-get update \
   && apt-get install -y \
   libffi8 \
@@ -38,6 +36,8 @@ RUN apt-get update \
   libcurl4 \
   # Required to allows to identify file types when handling file uploads
   media-types \
+  # Required by wait-for-db.sh
+  netcat-openbsd \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
@@ -63,4 +63,8 @@ LABEL org.opencontainers.image.title="saleor/saleor" \
   org.opencontainers.image.authors="Saleor Commerce (https://saleor.io)" \
   org.opencontainers.image.licenses="BSD-3-Clause"
 
-CMD ["uvicorn", "saleor.asgi:application", "--host=0.0.0.0", "--port=8000", "--workers=2", "--lifespan=auto", "--ws=none", "--no-server-header", "--no-access-log", "--timeout-keep-alive=35", "--timeout-graceful-shutdown=30", "--limit-max-requests=10000"]
+# Railway: usar ENTRYPOINT para migraciones automáticas.
+# Cada servicio (api/worker/beat) sobreescribe CMD según su rol.
+# Railway inyecta $PORT dinámicamente.
+ENTRYPOINT ["/bin/sh", "scripts/railway-entrypoint.sh"]
+CMD uvicorn saleor.asgi:application --host=:: --port=${PORT:-8000} --workers=2 --lifespan=auto --ws=none --no-server-header --no-access-log --timeout-keep-alive=35 --timeout-graceful-shutdown=30 --limit-max-requests=10000

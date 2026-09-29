@@ -1,0 +1,266 @@
+# CI propia del fork (aclicona/licona-saleor). NO existe en el repo upstream de Saleor.
+#
+# Por que un archivo nuevo y no un arreglo de `tests-and-linters.yml`:
+#   1. Ese workflow esta en `state: deleted` en la API de Actions de GitHub para este
+#      fork: el archivo existe en `stable/3.22`, pero GitHub no lo tiene registrado, no
+#      corre nunca y `gh workflow run` contra el falla.
+#   2. Ademas es un archivo de upstream. Tocarlo paga deuda de merge en cada sync 3.22.x.
+#      Un archivo con nombre propio (`ci-fork.yml`) tiene cero conflictos por definicion.
+#
+# Por que hay `workflow_dispatch`: los PR que abre `sync-upstream.yml` usan
+# `secrets.GITHUB_TOKEN`, y GitHub no dispara workflows con eventos originados por ese
+# token (salvaguarda antibucle). Las unicas excepciones documentadas son
+# `workflow_dispatch` y `repository_dispatch`. Por tanto el dispatch manual es la UNICA
+# via por la que la rama de sync puede recibir CI.
+
+name: CI del fork
+
+# Permisos EXPLICITOS a proposito. Sin este bloque, el scope sale del ajuste de repo
+# "Workflow permissions" (Settings -> Actions -> General), que NO esta versionado: hoy
+# vale `write` en este fork, pero GitHub pone `read` por defecto en los repos nuevos
+# desde 2023. En un repo replicado para un cliente, `actions/upload-artifact` fallaria
+# con 403 y tumbaria el job `suite` ENTERO — un run donde los 17k tests pasaron se veria
+# como suite fallida en el enlace que `sync-upstream.yml` pone en el cuerpo del PR.
+# Es el mismo modo de fallo que ya mordio al job `sync`: permiso implicito que se rompe
+# lejos y miente cerca.
+permissions:
+  contents: read
+  actions: write   # `actions/upload-artifact@v4` lo exige
+
+on:
+  # `push` sobre `stable/*` existe porque la via de despliegue real de este fork es
+  # push DIRECTO a `stable/3.22`, sin PR de por medio. Mientras todo disparara solo
+  # en `pull_request`, la CI no vigilaba NADA en el unico camino que se usa: un
+  # `schema.graphql` desincronizado del codigo llegaba a Railway sin que nadie mirara.
+  #
+  # Honestidad sobre lo que este trigger ES y lo que NO es: en `push`, `puerta` es una
+  # ALARMA POST-HOC, no un gate. Railway despliega el commit en paralelo y no espera a
+  # la CI; cuando el job termina, la version mala ya esta arriba. Lo que aporta es la X
+  # roja en el commit y el correo al autor -- que alguien se entere en minutos, no en el
+  # proximo `npm run codegen` del storefront. Un gate de verdad exigiria rama protegida
+  # y PR obligatorio, y eso es otra decision, con otro coste de flujo.
+  push:
+    branches: [ 'stable/*' ]
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [ 'stable/*' ]
+  workflow_dispatch:
+    inputs:
+      alcance:
+        description: 'completo = puerta + linters + suite | rapido = solo la puerta'
+        type: choice
+        options: [completo, rapido]
+        default: completo
+
+env:
+  CACHE_URL: "redis://cache:6379/0"
+  DATABASE_URL: "postgres://saleor:saleor@postgres:5432/saleor"
+  SECRET_KEY: ci-test
+
+# Agrupa por workflow + PR (o ref, cuando no hay PR). Un push nuevo cancela el anterior.
+# En `push` sobre `stable/*` eso significa que dos commits seguidos dejan viva solo la
+# alarma del segundo. No se pierde senal: el segundo run mide el arbol resultante, que
+# sigue teniendo la deriva mientras nadie la arregle.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Puerta rapida: lo que un parche 3.22.x rompe de verdad contra los parches locales
+  # del fork -- un import roto por un rename upstream, una migracion que falta, deriva
+  # de configuracion. Corre SIEMPRE: en PR, en `alcance: rapido` y en `push` -- donde es
+  # el UNICO job que corre (ver las condiciones de `linters` y `suite` mas abajo).
+  #
+  # Son SEIS parches locales, no diecinueve: `manage.py`, `saleor/asgi/__init__.py`,
+  # `saleor/celeryconf.py`, `pyproject.toml`, la migracion `discount/0052` y el
+  # `Dockerfile` (ver "Cuanto divergimos de upstream" en UPGRADE_NOTES.md, medido con
+  # `git diff --stat`). El 19 que aparece en `sync-upstream.yml` es otra cosa: los 19
+  # tags de parche de UPSTREAM que absorbio el sync de 3.22.48 a 3.22.67.
+  # ---------------------------------------------------------------------------
+  puerta:
+    name: Puerta rapida
+    runs-on: ubuntu-latest
+    container: python:3.12
+    timeout-minutes: 15
+
+    services:
+      # `manage.py makemigrations --check` necesita una base alcanzable.
+      postgres:
+        image: library/postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: saleor
+          POSTGRES_USER: saleor
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Instalar dependencias de sistema
+        run: |
+          apt-get install -y libpq-dev
+
+      - uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.0.0
+        with:
+          enable-cache: true
+
+      - name: Sincronizar el entorno (uv sync --locked)
+        run: uv sync --locked
+
+      - name: El proyecto importa
+        run: uv run python -c "import saleor"
+
+      - name: Ruff
+        run: uv run ruff check .
+
+      - name: Django system check
+        run: uv run python manage.py check
+
+      - name: No faltan migraciones
+        run: uv run python manage.py makemigrations --check --dry-run
+
+      # Hermano conceptual del paso de arriba: los dos preguntan si un ARTEFACTO
+      # DERIVADO Y COMMITEADO sigue sincronizado con el codigo. `saleor/graphql/
+      # schema.graphql` esta versionado en el fork, y el storefront Nuxt VENDORIZA esa
+      # copia para generar sus tipos TypeScript. Si un parche local toca la capa GraphQL
+      # y nadie regenera, el archivo miente aqui y la mentira se descubre alla: en otro
+      # repo, dias despues, como un tipo que no cuadra.
+      #
+      # Por que aqui y no en `linters`: el hook `gql-schema-check` ya existe en
+      # `.pre-commit-config.yaml`, pero (a) `linters` corre `pre-commit run --all`
+      # entero -- mypy, semgrep, deptry, ~20 min de runner -- para un resultado que
+      # cuesta unos 10 s, y (b) `linters` NO corre en `push`, que es justo el camino que
+      # hay que cubrir. Aparte: `pre-commit install` nunca se ejecuto en este repo, asi
+      # que ese hook tampoco se dispara al commitear en local. Este paso no depende de el.
+      #
+      # `uv run` para heredar el entorno ya sincronizado: el guion usa `${PYTHON:-python}`
+      # y `uv run` deja `.venv/bin` primero en el PATH, de modo que `python` es el bueno
+      # sin codificar ninguna ruta. `sh` explicito, sin depender del bit de ejecucion.
+      #
+      # El guion distingue tres respuestas: 0 fiel, 1 deriva real, 2 "no pude preguntar"
+      # (entorno roto, Postgres caido, salida vacia). Aqui 1 y 2 fallan los dos, a
+      # proposito: en CI un "no se" es rojo. Nunca escribe sobre el esquema: genera a un
+      # temporal fuera del repo. Contrato completo en el encabezado del guion.
+      - name: El esquema GraphQL commiteado es fiel al codigo
+        run: uv run sh scripts/check-schema-fidelity.sh
+
+  # ---------------------------------------------------------------------------
+  # Linters completos via pre-commit. Se salta cuando el dispatch pidio `rapido`.
+  #
+  # Sobre la condicion: en un evento `pull_request` el contexto `inputs` esta vacio,
+  # asi que `inputs.alcance` es la cadena vacia y `inputs.alcance != 'rapido'` ya
+  # daria true. Aun asi se antepone `github.event_name != 'workflow_dispatch'`: la
+  # or corta antes de mirar `inputs` en todo evento que no sea dispatch, de modo que
+  # el comportamiento en PR no depende de como GitHub decida poblar (o no) `inputs`
+  # en eventos donde ese contexto no aplica. En PR corren los tres jobs.
+  #
+  # El `github.event_name != 'push'` de delante NO es decorativo: sin el, la condicion
+  # antigua evaluaba TRUE en `push` (no es dispatch, luego la or ya cortaba en true) y
+  # anadir el trigger habria puesto los TRES jobs a correr en cada push -- 20 min de
+  # linters y 60 de suite por commit, lo contrario de lo que se busca. `push` debe
+  # ejecutar solo la puerta.
+  #
+  # Los parentesis del segundo termino tampoco son decorativos: en las expresiones de
+  # GitHub `&&` liga mas fuerte que `||`, asi que sin ellos esto seria
+  # `(A && B) || C`, que vuelve a dar true en un dispatch `rapido`.
+  # ---------------------------------------------------------------------------
+  linters:
+    name: Linters (pre-commit)
+    runs-on: ubuntu-latest
+    container: python:3.12
+    timeout-minutes: 20
+    if: ${{ github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido') }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Instalar dependencias de sistema
+        run: |
+          apt-get install -y libpq-dev
+
+      - uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.0.0
+        with:
+          enable-cache: true
+
+      - name: Sincronizar el entorno (uv sync --locked)
+        run: uv sync --locked
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: ${{ runner.os }}-pre-commit-${{ hashFiles('**/.pre-commit-config.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pre-commit-
+
+      # `git config safe.directory` es el workaround de
+      # https://github.com/actions/runner-images/issues/6775 (checkout dentro de contenedor).
+      - name: Correr linters y checks
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          uv run pre-commit run --all --show-diff-on-failure
+
+  # ---------------------------------------------------------------------------
+  # Suite completa. Sin cobertura: el fork no la sube a ningun servicio externo (no
+  # tiene el secreto que haria falta) y quitarla ahorra minutos de runner.
+  # Misma condicion que `linters`, incluido el corte en `push`: 60 min de runner por
+  # commit no gatearian nada, porque Railway ya esta desplegando en paralelo sin
+  # esperar el resultado. En `push` la unica pregunta que se paga es la de la puerta.
+  # ---------------------------------------------------------------------------
+  suite:
+    name: Suite completa (17k tests)
+    runs-on: ubuntu-latest
+    container: python:3.12
+    timeout-minutes: 60
+    if: ${{ github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido') }}
+
+    services:
+      postgres:
+        image: library/postgres:15-alpine
+        env:
+          POSTGRES_PASSWORD: saleor
+          POSTGRES_USER: saleor
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      cache:
+        image: valkey/valkey:8.1-alpine
+        options: >-
+          --health-cmd "valkey-cli ping | grep PONG"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Instalar dependencias de sistema
+        run: |
+          apt-get install -y libpq-dev
+
+      - uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.0.0
+        with:
+          enable-cache: true
+
+      - name: Sincronizar el entorno (uv sync --locked)
+        run: uv sync --locked
+
+      - name: Correr la suite (sin e2e)
+        run: |
+          uv run pytest \
+            -m "not e2e" \
+            -n logical \
+            --junitxml=junit/test-results.xml \
+            -o junit_family=legacy
+
+      - name: Publicar resultados JUnit
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: resultados-pytest
+          path: junit/test-results.xml

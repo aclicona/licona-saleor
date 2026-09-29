@@ -4,9 +4,12 @@ import os
 from celery import Celery
 from celery.signals import setup_logging, worker_process_init
 from django.conf import settings
+from dotenv import load_dotenv
 
 from .core.telemetry import initialize_telemetry
 from .plugins import discover_plugins_modules
+
+load_dotenv()
 
 CELERY_LOGGER_NAME = "celery"
 

@@ -1,0 +1,1161 @@
+# UPGRADE NOTES — licona-saleor fork
+
+Este archivo documenta **todos los cambios aplicados encima del upstream de Saleor**.
+Antes de cada actualización de upstream, revisar esta lista para detectar conflictos potenciales.
+
+> **Regla de oro:** Solo actualizar de una minor a la siguiente consecutiva.
+> Para ir de 3.22 → 3.24 hay que pasar por 3.23 primero.
+
+---
+
+## Cambios aplicados
+
+### 2026-04-16 — Setup inicial Railway (base: 3.22.48)
+
+**Archivos modificados:**
+
+- `Dockerfile`
+  - Agregado `netcat-openbsd` en apt-get para el script `wait-for-db.sh`.
+  - Reemplazado `CMD` directo por `ENTRYPOINT ["scripts/railway-entrypoint.sh"]` + `CMD` original.
+  - Motivo: Railway inyecta `$PORT` dinámicamente y necesita ejecutar migraciones en el arranque.
+
+**Archivos creados:**
+
+- `railway.json` — Configuración de build y deploy para Railway.
+- `scripts/railway-entrypoint.sh` — Ejecuta `migrate` y opcionalmente crea superusuario antes de iniciar el proceso.
+- `scripts/wait-for-db.sh` — Espera a que Postgres acepte conexiones (útil en Railway donde DB puede tardar en estar lista).
+- `.env.railway.example` — Plantilla de variables de entorno para Railway (sin valores reales).
+- `.github/workflows/sync-upstream.yml` — Sync semanal automático con upstream.
+- `.github/workflows/build-image.yml` — Build y push de imagen Docker a GHCR en cada push a `stable/3.22`.
+  ⚠️ **Retirado del árbol el 2026-09-03 sin haber tenido nunca un run verde** (0 éxitos en 36 runs,
+  la imagen nunca llegó a existir en GHCR y nadie la consumía). Ver la entrada de esa fecha.
+- `.github/workflows/security-scan.yml` — Escaneo Trivy semanal de vulnerabilidades en la imagen.
+
+### 2026-04-17 — Fix migración discount.0052 para PostgreSQL 15+ (base: 3.22.48)
+
+**Archivos modificados:**
+
+- `saleor/discount/migrations/0052_drop_sales_constraints.py`
+  - Envuelto cada `execute DROP CONSTRAINT` en `BEGIN/EXCEPTION WHEN others THEN null END`.
+  - Motivo: PostgreSQL 15+ lanza `InvalidTableDefinition` al intentar dropear el constraint
+    `*_id_not_null` en tablas donde `id` es parte de la PK (ej. `discount_sale_collections`).
+    El `IF EXISTS` no es suficiente para este tipo de error; hay que capturar la excepción.
+  - **Conflicto potencial al actualizar upstream:** Si Saleor corrige esta migración en el upstream,
+    puede haber un conflicto en este archivo. Revisar y descartar el parche local si el fix upstream
+    lo resuelve correctamente.
+
+**Sin cambios en:**
+
+- Lógica de negocio de Saleor
+- Modelos ni settings de Django
+- Código Python del core
+
+### 2026-04-29 — Carga de `.env` para desarrollo local (base: 3.22.48)
+
+**Archivos modificados:**
+
+- `manage.py`
+  - `from dotenv import load_dotenv` + `load_dotenv()` dentro de `if __name__ == "__main__":`,
+    antes del `os.environ.setdefault("DJANGO_SETTINGS_MODULE", ...)`.
+- `saleor/asgi/__init__.py`
+  - `from dotenv import load_dotenv` en el bloque de imports de cabecera (como third-party, entre la
+    stdlib y los imports relativos) + `load_dotenv()` a nivel de módulo antes del
+    `os.environ.setdefault("DJANGO_SETTINGS_MODULE", ...)`.
+  - **Corregido el 2026-08-22:** el import se había dejado suelto en la línea 34, después de las
+    definiciones de función. `ruff check .` lo marcaba con `E402` (module level import not at top of
+    file) e `I001` (import block un-sorted) — eran los **únicos 2 errores de lint del fork entero**.
+    Mover el import a la cabecera deja `ruff check .` en `All checks passed!`. La posición de la
+    **llamada** sí importa (tiene que preceder a la lectura de settings); la del import no.
+- `saleor/celeryconf.py`
+  - `from dotenv import load_dotenv` en los imports + `load_dotenv()` tras ellos.
+
+**Motivo:** upstream espera las variables ya exportadas en el entorno (en Railway las inyecta la
+plataforma). Para desarrollo local con `.env` hacía falta cargarlas explícitamente en los tres puntos
+de entrada: comandos de gestión, ASGI y Celery (worker y beat).
+
+**En producción es inocuo:** sin archivo `.env` presente, `load_dotenv()` es un no-op y las variables
+siguen viniendo del entorno de Railway.
+
+> ⚠️ **Riesgo conocido — `python-dotenv` no es dependencia directa.** Hoy llega de forma
+> **transitiva**, como extra de `uvicorn[standard]` y con marker
+> `platform_python_implementation != 'PyPy'` (ver `uv.lock`). Como el import es a nivel de módulo en
+> `saleor/asgi/__init__.py` y `saleor/celeryconf.py`, si un cambio de resolución de dependencias
+> dejara de traerlo, **los tres servicios (`saleor-api`, `saleor-worker`, `saleor-beat`) fallarían al
+> arrancar** con `ModuleNotFoundError`. Hoy no ocurre porque los tres comparten la misma imagen, que
+> sí instala `uvicorn[standard]`. Corrección pendiente: declarar `python-dotenv` como dependencia
+> directa en `pyproject.toml`.
+>
+> ✅ **Resuelto el 2026-08-22** — ver la entrada de esa fecha más abajo.
+
+**Conflicto potencial al actualizar upstream:** bajo. Son adiciones en zonas estables de los tres
+archivos; un cambio de upstream en las mismas líneas es improbable pero revisable.
+
+**Archivos modificados (higiene):**
+
+- `.gitignore` — añadido `celerybeat-schedule*` (estado local de Celery beat, se regenera).
+
+### 2026-08-22 — `python-dotenv` como dependencia directa (base: 3.22.48)
+
+**Archivos modificados:**
+
+- `pyproject.toml`
+  - Añadida `"python-dotenv>=1.1.1,<2"` a `[project].dependencies`, en orden alfabético entre
+    `python-dateutil` y `python-http-client`, con el estilo `>=mínimo,<major siguiente` que usa el
+    resto del archivo. El mínimo es la versión que ya estaba resuelta en el lock, así que la
+    restricción no fuerza ningún cambio de resolución.
+- `uv.lock`
+  - Regenerado con `uv lock` (uv 0.8.14, la misma versión que fija el hook `uv-lock` de
+    `.pre-commit-config.yaml`; el `Dockerfile` usa la serie `0.8`). El diff son **exactamente dos
+    líneas añadidas**: `python-dotenv` entra en `[[package]] name = "saleor"` → `dependencies` y en
+    `metadata.requires-dist`. Ninguna versión de ningún paquete cambió; siguen siendo 239 paquetes
+    resueltos y `python-dotenv` sigue clavada en 1.1.1.
+
+**Motivo (por qué, no solo qué):** desde el 2026-04-29 hay `from dotenv import load_dotenv` **a nivel
+de módulo** en `saleor/asgi/__init__.py` y `saleor/celeryconf.py` (y dentro de `__main__` en
+`manage.py`), pero el paquete nunca se declaró. Llegaba de rebote como extra de `uvicorn[standard]`,
+y encima condicionado al marker `platform_python_implementation != 'PyPy'`.
+
+Que hoy funcione es una coincidencia de empaquetado, no un contrato: los tres servicios de producción
+—`saleor-api`, `saleor-worker` y `saleor-beat`— comparten **la misma imagen Docker**, y esa imagen
+instala `uvicorn[standard]` porque la API sirve con uvicorn. El worker y el beat **no necesitan
+uvicorn para nada**; el día que se construya una imagen separada y más delgada para ellos —o que un
+upgrade de `uvicorn` mueva `python-dotenv` fuera del extra `standard`—, los tres arrancarían con
+`ModuleNotFoundError: No module named 'dotenv'` **antes de emitir un solo log útil**. Es un fallo de
+arranque, silencioso en la revisión de código y ruidoso en producción.
+
+Declararla directa convierte esa dependencia implícita en explícita: el resolvedor la garantiza
+aunque `uvicorn` desaparezca del árbol.
+
+**Verificación:** `uv tree --invert --package python-dotenv` pasa de listar un solo consumidor
+(`uvicorn (extra: standard)`) a listar dos (`saleor` y `uvicorn`). Además `manage.py check` limpio y
+`ruff check .` en `All checks passed!`.
+
+**Conflicto potencial al actualizar upstream:** medio-bajo. `pyproject.toml` y `uv.lock` son
+archivos que upstream toca a menudo (bumps de dependencias), así que el sync semanal puede marcar
+conflicto ahí. La resolución es siempre la misma: conservar la línea de `python-dotenv` y regenerar
+el lock. Upstream no usa `python-dotenv`, por lo que nunca va a añadir la línea por su cuenta.
+
+---
+
+### 2026-08-27 — CI propia del fork y verificación de los PR de sync (base: 3.22.67)
+
+**Archivos añadidos:**
+
+- `.github/workflows/ci-fork.yml` — **nuevo, sin equivalente en upstream.** Tres jobs: `puerta`
+  (import + ruff + `manage.py check` + `makemigrations --check`, techo 15 min), `linters`
+  (`pre-commit run --all`, techo 20 min) y `suite` (la suite completa sin e2e, techo 60 min).
+  Dispara con `pull_request` sobre `stable/*` y con `workflow_dispatch` (input `alcance`:
+  `completo` | `rapido`).
+
+**Archivos modificados:**
+
+- `.github/workflows/sync-upstream.yml` — el job `sync` pasa de un `run:` monolítico a cinco pasos
+  con `id`. Añade una **puerta rápida en línea** (techo 10 min, sin tests) cuando el merge sale sin
+  conflictos, dispara `ci-fork.yml` sobre la rama de sync, y **reescribe el cuerpo del PR** para que
+  el estado de verificación sea lo primero que se lee. El job `check-new-minor` **no se tocó**
+  (verificado por diff de bloque: 117 líneas idénticas antes y después).
+- `manage.py` — **una línea en blanco** tras `from dotenv import load_dotenv`, que es lo que pide
+  `ruff-format`. Ver el motivo abajo.
+
+**Motivo — por qué existe un `ci-fork.yml` en vez de arreglar `tests-and-linters.yml`:**
+
+Medido el 2026-08-27 contra la API de Actions de GitHub, no supuesto:
+
+```
+gh api repos/aclicona/licona-saleor/actions/workflows/tests-and-linters.yml -q .state
+→ deleted
+```
+
+Lo mismo para `check-licenses.yaml` y `check-migration-tasks.yml`. Los tres archivos **existen** en
+`stable/3.22`, que es la rama por defecto, y aun así GitHub los tiene por borrados. La explicación más
+probable —**inferencia, no medición**— es que el registro de Actions del fork heredara el borrado que
+upstream hizo en `ec664a1d32` (*fix(build): always run linters + add `sfw`*, #19573), un commit que
+solo vive en ramas de upstream. Lo medido es el `state` y el historial vacío, no la causa; para el
+arreglo la causa da igual. Consecuencia medida:
+`gh run list --workflow tests-and-linters.yml` devuelve **vacío** — la suite de este fork **no ha
+corrido ni una sola vez** desde que se creó en abril de 2026.
+
+Aun sin ese problema, tocar `tests-and-linters.yml` sería un error: es un archivo de upstream, y
+`sync-upstream.yml` descarta a propósito todo `.github/workflows/` que venga de upstream (porque el
+`GITHUB_TOKEN` tiene prohibido empujar cambios ahí). Un archivo con nombre propio tiene **cero
+conflictos de merge por definición**.
+
+**Motivo — por qué el PR de sync necesita verificación dentro de su propio job:**
+
+GitHub no dispara workflows con eventos originados por `secrets.GITHUB_TOKEN` (salvaguarda antibucle
+documentada; las únicas excepciones son `workflow_dispatch` y `repository_dispatch`). El PR #3
+(`sync/upstream-3.22.67`) llegó a revisión humana con **cero** checks: sus seis CheckRuns son todos
+`SKIPPED` y con timestamp del evento `closed` al mergear, no de la apertura. Ese sync traía dos CVE.
+
+Se descartó la alternativa del PAT: una credencial de larga vida que caduca en silencio reproduce
+exactamente el fallo que se está arreglando —algo que deja de verificar sin avisar— y sería un punto
+único de fallo en la cadena de suministro de **todas** las instancias de cliente a la vez.
+
+**Motivo — la línea en blanco de `manage.py`:**
+
+`pre-commit run --all` sobre `stable/3.22` limpio da **`ruff format` en Failed, 1 archivo
+reformateado**: `manage.py`, que es un parche local del fork (el `load_dotenv` del 2026-04-29). El
+resto está verde. El
+parche entró sin pasar por el formateador del propio fork **porque ese formateador nunca ha corrido**,
+que es justo lo que arregla este cambio. Tomar el reformateo es lo que evita que `ci-fork.yml` nazca
+en rojo por una razón que no tiene nada que ver con lo que vigila.
+
+**Verificación (2026-08-27, sobre `stable/3.22`):**
+
+- `pre-commit run --all` tras el reformateo → **los diez hooks en verde, exit 0**:
+  `trailing-whitespace`, `end-of-file-fixer`, `ruff`, `ruff-format`, `mypy`, `deptry`, `semgrep`,
+  `uv-lock`, `Check for uncreated migrations` y `Check GraphQL schema is up to date`.
+  ⚠️ En la corrida **anterior** al reformateo, `semgrep` salió `Failed — files were modified by this
+  hook`. Es un **falso positivo por cascada**: pre-commit le atribuyó la modificación que había dejado
+  `ruff-format`. Con el árbol formateado pasa. No perseguirlo.
+
+- `.venv/bin/ruff check .` → `All checks passed!`
+- `.venv/bin/python manage.py check` → `System check identified no issues (0 silenced).`
+- `.venv/bin/python manage.py makemigrations --check --dry-run` → `No changes detected`, exit 0
+- `python -c "import saleor"` → OK, `3.22.67`
+- Los cuatro son exactamente los comandos de la puerta rápida, así que la línea base de la puerta
+  está medida antes de existir.
+- Se comprobó además, apuntando `CACHE_URL` a un puerto muerto, que **la puerta no necesita Redis**:
+  `manage.py check` y `makemigrations --check` salen 0 igual. Por eso el job `sync` declara solo
+  Postgres.
+
+**Primer run real de `ci-fork.yml`** (`workflow_dispatch` sobre `stable/3.22`,
+[run 33126906393](https://github.com/aclicona/licona-saleor/actions/runs/33126906393)) — los tres jobs
+en verde:
+
+| Job | Resultado | Duración |
+|---|---|---|
+| `Puerta rapida` | `success` | 1 min 31 s |
+| `Linters (pre-commit)` | `success` | 5 min 34 s |
+| `Suite completa (17k tests)` | `success` — **17 265 passed, 2 skipped, 0 failed** | 17 min 40 s |
+
+⚠️ **Dato que corrige la línea base documentada del proyecto:** los **17 fallos "preexistentes"** que
+aparecen al correr la suite en macOS local **no existen en Linux CI**. La primera ejecución de esta
+suite en CI en toda la vida del fork sale limpia. Los 17 son un artefacto del entorno local, no una
+deuda del fork.
+
+**Permisos, explícitos en los dos workflows y a propósito.** `ci-fork.yml` declara
+`contents: read` + `actions: write` (lo exige `actions/upload-artifact`), y `sync-upstream.yml` añade
+`actions: write` al job `sync` (lo exige `gh workflow run`). Sin declararlos, el scope sale del ajuste
+de repo *Workflow permissions*, que **no está versionado** y que GitHub pone en solo lectura para los
+repos nuevos desde 2023 — o sea que un repo replicado para un cliente los rompería, y de forma
+engañosa: el job `suite` saldría rojo por el `upload-artifact`, no por los tests.
+
+**Conflicto potencial al actualizar upstream:** **ninguno.** `ci-fork.yml` y `sync-upstream.yml` no
+existen en upstream, y el propio `sync-upstream.yml` descarta todo `.github/workflows/` que llegue
+del merge. La línea en blanco de `manage.py` sí puede conflictuar, pero `manage.py` ya era un archivo
+con parche local y ya estaba en la lista de conflictos previsibles.
+
+### 2026-09-01 — Guion de chequeo de migraciones (base: 3.22.67)
+
+**Archivos añadidos:**
+
+- `scripts/check-migrations.sh` — **nuevo, sin equivalente en upstream.** Responde una sola
+  pregunta —¿está la base migrada a la altura del código?— y **no muta nada**: nunca corre
+  `migrate`. Existe porque `manage.py migrate --check` es mudo (0 bytes en stdout, verde o rojo)
+  y solo habla por exit code; el guion genera el mensaje: ante pendientes lista **cuáles**
+  (vía `showmigrations --plan`) y el comando exacto para aplicarlas.
+  Contrato de salida: **0** = base al día · **1** = hay migraciones pendientes (accionable:
+  migrar) · **2** = **no se pudo responder** la pregunta (base inaccesible o inexistente,
+  Postgres apagado, entorno Python roto). **2 significa "no sé", no "está mal"**: conflarlo con 1
+  llevaría a correr `migrate` contra una base apagada.
+  Intérprete configurable con `${PYTHON:-python}` (local recibe `.venv/bin/python`; en la imagen
+  vale el del PATH). `sh` POSIX puro, como los otros dos guiones de `scripts/`.
+
+**Motivo:** vive en el fork porque la imagen del fork es el **único artefacto que viaja a todas las
+instancias de cliente**. Ahí una sola fuente sirve a sus tres llamadores —`dev.sh` en local, la
+sesión nocturna y (cuando el humano lo apruebe) el `preDeployCommand` de Railway— sin adaptarla.
+El caso que lo motiva está medido: el 2026-08-28 la API local devolvió HTTP 500 en todo GraphQL
+porque el sync a 3.22.67 trajo migraciones y nadie migró la base local.
+
+**Conflicto potencial al actualizar upstream:** **ninguno.** El archivo no existe en upstream, así
+que no hay nada del otro lado con qué chocar. En un re-fork limpio se copia con el resto de
+`scripts/`.
+
+### 2026-09-03 — Guion de fidelidad del esquema GraphQL y `push` en la CI (base: 3.22.67)
+
+**Archivos añadidos:**
+
+- `scripts/check-schema-fidelity.sh` — **nuevo, sin equivalente en upstream.** Hermano de
+  `check-migrations.sh`: mismo tipo de pregunta (¿el artefacto derivado y commiteado sigue
+  sincronizado con el código?), mismo contrato de salida, mismo compromiso de no mutar nada.
+  Responde si `saleor/graphql/schema.graphql` es byte a byte lo que emite
+  `manage.py get_graphql_schema`. **Nunca escribe sobre el esquema**: genera a un temporal
+  (`mktemp -d`, fuera del repo, borrado con `trap`).
+  Contrato de salida: **0** = fiel · **1** = deriva real (accionable: regenerar, y el guion
+  imprime el comando exacto) · **2** = **no se pudo responder** (entorno Python roto,
+  `manage.py` caído, Postgres apagado, salida vacía o que no parece un SDL).
+  **La distinción 1/2 es la razón de ser del guion.** El comando de la comprobación —
+  `manage.py get_graphql_schema | diff saleor/graphql/schema.graphql -` — falla de forma
+  engañosa: si `manage.py` muere, su stdout sale **vacío** y `diff` reporta las ~38 000 líneas
+  del archivo como diferentes. Eso parece deriva catastrófica y en realidad es "no pude
+  preguntar". Por eso el guion valida el **exit code**, que la salida **no esté vacía** y que
+  **empiece por `schema {`** ANTES de mirar el diff.
+  Intérprete configurable con `${PYTHON:-python}`, `sh` POSIX puro, funciona desde cualquier
+  cwd (resuelve la raíz desde `$0`) — las mismas convenciones que `check-migrations.sh`.
+
+**Archivos modificados:**
+
+- `.github/workflows/ci-fork.yml` — tres cambios:
+  1. Trigger `push: branches: ['stable/*']` nuevo.
+  2. Paso nuevo en `puerta`: `uv run sh scripts/check-schema-fidelity.sh`, colocado junto a
+     `No faltan migraciones`, que es su hermano conceptual.
+  3. `github.event_name != 'push' &&` antepuesto a los `if:` de `linters` y `suite`, con el
+     segundo término entre paréntesis.
+
+**Motivo — por qué el invariante no estaba vigilado en ningún sitio:**
+
+`saleor/graphql/schema.graphql` está commiteado en el fork y **el storefront Nuxt vendoriza esa
+copia** para generar sus tipos TypeScript. Si un parche local toca la capa GraphQL y nadie
+regenera, el archivo miente aquí y la mentira se descubre allá: en otro repo, días después.
+Medido el 2026-09-03, el enforcement era **cero en el camino que se usa**:
+
+| Vía | Estado medido |
+|---|---|
+| Hook `gql-schema-check` de `.pre-commit-config.yaml` | Declarado, pero **`.git/hooks/` solo tiene los `.sample`**: `pre-commit install` nunca se corrió. No se dispara en ningún commit local. |
+| `ci-fork.yml` | Disparaba solo en `pull_request` sobre `stable/*` y `workflow_dispatch`. **Sin trigger `push`.** |
+| Despliegue real | **Push directo a `stable/3.22`, sin PR.** |
+
+O sea: el único camino que se usa no pasaba por ninguna de las dos comprobaciones.
+
+**Motivo — por qué el check entra en `puerta` y no en `linters`:**
+
+`puerta` es el job que corre siempre, y el check de esquema es de la **misma clase** que
+`makemigrations --check`: artefacto derivado desincronizado del código. `linters` corre
+`pre-commit run --all` **entero** —mypy, semgrep, deptry, ~20 min de runner— para un resultado
+que cuesta **9,5 s** (medido en local, ver abajo); y además `linters` no corre en `push`, que es
+justo el camino a cubrir. `suite` tampoco entra en `push`: 60 min de runner que no gatean nada,
+porque **Railway despliega el commit en paralelo sin esperar a la CI**.
+
+**El gotcha de las condiciones, y por qué había que tocarlas.** Los `if:` antiguos eran
+`${{ github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido' }}`, que evalúa
+**TRUE en `push`** (no es dispatch → la `or` corta en true). Añadir el trigger sin tocarlos
+habría puesto los **tres** jobs a correr en cada push — 20 min de linters y 60 de suite por
+commit, exactamente lo contrario de lo que se busca. Los paréntesis del segundo término tampoco
+son decorativos: en las expresiones de GitHub `&&` liga más fuerte que `||`, así que sin ellos
+la condición sería `(A && B) || C` y volvería a dar true en un dispatch `rapido`.
+
+**Qué es y qué NO es este trigger, dicho sin adornos.** En `push`, `puerta` es una **alarma
+post-hoc, no un gate**. Railway no espera a la CI: cuando el job termina, la versión mala ya está
+arriba. Lo que aporta es la X roja en el commit y el correo al autor — que alguien se entere en
+minutos en vez de en el próximo `npm run codegen` del storefront. Un gate de verdad exigiría rama
+protegida y PR obligatorio; esa es otra decisión, con otro coste de flujo, y no se toma aquí.
+
+**Política de fallo, deliberadamente distinta por capa.** En CI, exit 1 y exit 2 fallan los dos:
+un "no sé" en CI es rojo (falla cerrado). Un llamador que deba **callar** ante el 2 —la sesión
+nocturna, por ejemplo— tiene que distinguirlo, y por eso el guion no colapsa los dos códigos.
+
+**Verificación (2026-09-03, sobre el worktree `hardening/gate-esquema-1.43`):**
+
+- Los tres códigos de salida, medidos de verdad:
+
+| Caso | Cómo se forzó | Resultado |
+|---|---|---|
+| Esquema fiel | tal cual, e invocado desde `/` para probar la independencia del cwd | **exit 0** |
+| Deriva real | copia del esquema con una línea borrada y cuatro añadidas, restaurada después | **exit 1**, `+1 línea(s) que faltan · -5 línea(s) que sobran` + comando de regeneración |
+| Intérprete que muere | `PYTHON=/usr/bin/false` (existe, ejecutable, sale 1, stdout vacío) | **exit 2**, no 1 |
+| Python real sin dependencias | `PYTHON=/usr/bin/python3` | **exit 2**, `Línea reveladora: ModuleNotFoundError: No module named 'dotenv'` |
+| Intérprete mudo que sale 0 | `PYTHON=/usr/bin/true` | **exit 2**, `salió 0 pero no imprimió nada` |
+| Intérprete inexistente | `PYTHON=/no/existe/python` | **exit 2** |
+
+  Tras el caso de deriva, el `sha256` del esquema volvió a ser idéntico al de partida
+  (`b4070edb…`) y `git status` quedó limpio: el guion **no escribió** sobre el archivo en ningún
+  momento; la deriva la fabricó el test, no el guion.
+
+- Coste: **9,48 s** (`time`, en local). Es lo que se le añade a `puerta`.
+- `sh -n scripts/check-schema-fidelity.sh` → sintaxis OK. `shellcheck` **no está instalado** en la
+  máquina; el guion no pasó por él.
+- `python3 -c "import yaml; yaml.safe_load(...)"` sobre `ci-fork.yml` → válido; los triggers
+  quedan `['push', 'pull_request', 'workflow_dispatch']` y `puerta` sigue **sin `if:`**.
+  `actionlint` **no está instalado**; la validación es de YAML, no de la semántica de Actions.
+- Tabla de verdad de los `if:` de `linters` y `suite`, con
+  `A = event_name != 'push'` y `B = event_name != 'workflow_dispatch'`, `C = inputs.alcance != 'rapido'`:
+
+| Evento | A | B | C | `A && (B \|\| C)` | Jobs que corren |
+|---|---|---|---|---|---|
+| `push` sobre `stable/*` | false | true | true | **false** | solo `puerta` |
+| `pull_request` | true | true | true (`inputs` vacío) | **true** | los tres |
+| `workflow_dispatch` `alcance: completo` | true | false | true | **true** | los tres |
+| `workflow_dispatch` `alcance: rapido` | true | false | false | **false** | solo `puerta` |
+
+- **Verificado en GitHub el 2026-09-03**, no solo razonado sobre el YAML. Push de `5d27391e` a
+  `stable/3.22` a las 19:21 → run
+  [33821463025](https://github.com/aclicona/licona-saleor/actions/runs/33821463025), evento `push`:
+  `Puerta rapida` **success**, `Linters (pre-commit)` **skipped**, `Suite completa` **skipped** —
+  exactamente la fila `push` de la tabla de arriba. El paso nuevo salió
+  `[check-schema-fidelity] El esquema commiteado es fiel al código`, en **~10 s** (00:23:05 →
+  00:23:15 UTC).
+- **Y de paso quedó medido el agujero que el trigger `push` viene a tapar:** los dos PR abiertos del
+  repo —#4 (sync 3.22.68) y #5 (bump de dependencias)— tienen runs de `ci-fork.yml` en estado
+  `action_required` con **0 s y CERO jobs ejecutados**. Es el gotcha ya documentado (un PR abierto
+  con `secrets.GITHUB_TOKEN` no dispara workflows), pero su consecuencia no se había medido: el job
+  `linters` —el único que corría `pre-commit run --all` y con él `gql-schema-check`— **solo se ha
+  ejecutado dos veces en la vida del repo**, ambas por `workflow_dispatch` manual el 2026-08-27.
+
+- **`AGENTS.md` (= `CLAUDE.md`, que es un symlink a él) — corregida una ruta que causaba justo
+  este defecto.** La sección "Comandos clave" decía
+  `python manage.py get_graphql_schema > schema.graphql`: ruta equivocada. Seguirla crea un
+  `schema.graphql` huérfano en la raíz del repo y deja **sin regenerar** el archivo versionado
+  de verdad, `saleor/graphql/schema.graphql` — es decir, la documentación del propio fork
+  describía el camino más corto para producir la deriva que este guion viene a detectar. Ahora
+  apunta a la ruta correcta y remite a `scripts/check-schema-fidelity.sh`.
+  **Deuda de merge: ninguna adicional.** `AGENTS.md` ya está listado más abajo como
+  "reemplazamos el de upstream entero", resuelto automáticamente vía `merge=ours` en
+  `.gitattributes`.
+
+**Conflicto potencial al actualizar upstream: ninguno.** Los **dos** archivos son propios del
+fork: `scripts/check-schema-fidelity.sh` no existe en upstream, y `ci-fork.yml` tampoco (y
+`sync-upstream.yml` descarta a propósito todo `.github/workflows/` que llegue del merge). Cero
+deuda de merge por definición: no hay nada del otro lado con qué chocar.
+
+### 2026-09-03 — Retirada de dos workflows en rojo crónico (base: 3.22.67)
+
+**Archivos eliminados:**
+
+- `.github/workflows/build-image.yml` — **propio del fork, creado el 2026-04-16.** Construía y
+  empujaba `ghcr.io/aclicona/licona-saleor` en cada push y PR sobre `stable/3.22`.
+  **Nunca tuvo un run verde: 0 éxitos en 36 runs**, desde su primer día hasta hoy. La causa es una
+  línea que falta, no una que sobre: el workflow pide `cache-to: type=gha` a
+  `docker/build-push-action@v5` sin haber corrido antes `docker/setup-buildx-action@v3`, así que
+  el build usa el driver `docker` por defecto y muere siempre con
+  `ERROR: failed to build: Cache export is not supported for the docker driver.`
+- `.github/workflows/test-env-cleanup-cron.yml` — **heredado de upstream.** Cron diario (`0 2 * * *`
+  UTC) que asume un lambda `test-env-manager` y una cuenta AWS de entornos de test de Saleor Inc.
+  Nosotros no tenemos ni el lambda ni la cuenta ni los secretos (`AWS_TESTENVS_ACCOUNT_ID`,
+  `AWS_TESTENVS_CICD_ROLE_NAME`), así que muere en el primer paso.
+  **12 de 12 runs en rojo.** Nótese que es el *cron*: `test-env-cleanup.yml` (el disparado por
+  evento de PR) se queda, porque sin `schedule` no se ejecuta solo.
+
+**Por qué borrar y no arreglar `build-image.yml` — lo medido, no lo opinado:**
+
+| Pregunta | Medición del 2026-09-03 |
+|---|---|
+| ¿Existe la imagen? | `gh api /users/aclicona/packages/container/licona-saleor/versions` → **`404 Package not found`**. Nunca se publicó ni una versión. |
+| ¿Quién la consume? | `grep -rn "ghcr.io/aclicona/licona-saleor"` sobre los **tres** repos y todas las docs → **cero coincidencias**. |
+| ¿La usa Railway? | No. `railway.json` declara `"builder": "DOCKERFILE"`: Railway construye desde el fuente. |
+| ¿La usa el escaneo? | No. `security-scan.yml:20` hace `docker build -t licona-saleor:scan .` en local; no lee GHCR. |
+
+Un artefacto que nunca existió y que nadie lee no es una pieza rota: es una pieza que no está en
+el sistema. **El artefacto de replicabilidad real de este fork es el `Dockerfile` versionado +
+`uv.lock` + el SHA de `stable/3.22`**, que es lo que Railway construye. Arreglar el workflow
+habría añadido un segundo camino de build —con su propia caché, su propio drift y su propia
+superficie de mantenimiento— para producir bits que nadie iba a descargar.
+
+**Por qué corría prisa, y no era estética.** `build-image.yml` disparaba en `push` a `stable/3.22`,
+o sea en la **misma lista de checks del commit** que el guardarraíl `puerta` de `ci-fork.yml`
+instalado hoy. Medido sobre el HEAD `30e235659e`: `Puerta rapida: success`, `trivy: success`,
+`build: failure` → **estado agregado del commit = `failure`**. El guardarraíl recién puesto nacía
+ya dentro de una X roja permanente, que es la forma más rápida de enseñarle a un equipo que las X
+rojas de este repo no significan nada.
+
+**Regla general que esto fija, aplicable a todo el fork:**
+
+> **Lo que no está en el árbol no existe para la instancia N+1.** Se borra en el árbol, **nunca**
+> con `gh workflow disable` ni desde la UI de Actions.
+
+El modelo de negocio es single-tenant replicable: cada cliente es un clone. El estado de "disabled"
+de un workflow vive en la base de datos de GitHub del repo original y **no se clona**; el archivo
+sí. Deshabilitar por UI produce una instancia N+1 que arranca con el cron rojo del día uno y con
+un humano preguntándose por qué "en el repo de referencia no salía".
+
+**Archivos modificados:**
+
+- `.github/workflows/sync-upstream.yml` — el reset de `.github/workflows/` pasa a ser una
+  restauración **completa** del directorio:
+
+  ```sh
+  rm -rf .github/workflows
+  if ! git checkout "$BASE_SHA" -- .github/workflows/; then
+    echo "::error::No se pudo restaurar .github/workflows/ desde $BASE_SHA."
+    exit 1
+  fi
+  ```
+
+  **Motivo:** `git checkout <sha> -- <dir>` **restaura** lo que existe en `<sha>` pero **no elimina**
+  lo que el merge haya dejado en el índice y `<sha>` no tenga. El comentario del propio archivo ya
+  daba por hecho que descartaba "los workflows de upstream" en bloque; no era cierto. El defecto ya
+  existía —bastaba con que upstream añadiera un workflow para que el push muriera con el error de
+  permiso `workflows` que ese mismo comentario documenta—, y borrar archivos del fork lo amplía:
+  upstream **sigue teniendo** `test-env-cleanup-cron.yml`, así que cada merge semanal lo
+  re-añadiría y el `checkout` no lo quitaría. El `git add -A` que ya estaba tres líneas más abajo
+  estagea las eliminaciones sin cambio adicional.
+
+  **Por qué el `if !` en vez del `|| true` heredado:** el paso corre con `set -uo pipefail`, **sin
+  `-e`**. Con `rm -rf` delante, un `|| true` convertiría un `checkout` fallido en "borra los 24
+  workflows y ábrelo como PR de sync". Se comprueba a mano y se sale con 1: falla cerrado.
+
+- `UPGRADE_NOTES.md` — la línea de "Archivos creados" del 2026-04-16 documentaba `build-image.yml`
+  como pieza activa; ahora dice que se retiró y apunta aquí. La receta de salto de minor (3.22 →
+  3.23) mandaba "apuntar `build-image.yml` y `sync-upstream.yml` a `stable/3.23`": era una
+  instrucción hacia un archivo que ya no existe.
+
+**Receta literal de reintroducción**, si algún día hace falta publicar imagen. Lo que faltaba era
+un paso, en este orden, antes del `build-push-action`:
+
+```yaml
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+```
+
+Sin él, el driver por defecto es `docker`, que no implementa export de caché; con él se levanta el
+driver `docker-container`, que sí. Es la línea que habría bastado, y es exactamente la razón por la
+que borrarlo no es "renunciar a algo difícil".
+
+**Condiciones que tendrían que cumplirse para que valga la pena volver a añadirlo** — ninguna se
+cumple hoy, y por eso no se añade:
+
+1. **Varias instancias que deban recibir bits idénticos** sin reconstruir cada una. Hoy hay una
+   instancia y Railway reconstruye; con N clientes, N builds de la misma imagen es desperdicio y,
+   peor, N oportunidades de que los bits difieran.
+2. **El build de Railway convertido en cuello de botella** (tiempo de despliegue o minutos de
+   build) de forma medida, no supuesta.
+3. **Necesidad de rollback a una imagen pinneada** por digest que el historial de despliegues de
+   Railway no cubra.
+
+Si se reintroduce: el workflow vuelve **al árbol** (no se rehabilita nada por UI), se le añade el
+`setup-buildx-action`, y **se verifica que el package existe en GHCR** antes de anotarlo aquí como
+pieza activa — que es precisamente el paso que no se dio en abril.
+
+**Conflicto potencial al actualizar upstream:** **ninguno, por construcción.**
+`build-image.yml` es propio del fork y `sync-upstream.yml` también.
+`test-env-cleanup-cron.yml` **sí** existe en upstream y el merge semanal lo re-añadiría — es
+justo el caso que cubre el `rm -rf` de arriba, que lo vuelve a borrar en cada sync sin
+intervención humana. Coste de sync recurrente: **cero**, y por la misma razón de siempre:
+`.github/workflows/` del fork no sigue a upstream (decisión del 2026-08-22).
+
+### 2026-09-25 — Guion de branch protection y test de deriva del context (base: 3.22.67)
+
+**Archivos añadidos:**
+
+- `scripts/check-branch-protection.sh` — **nuevo, sin equivalente en upstream.** Tercer hermano
+  de `check-migrations.sh` y `check-schema-fidelity.sh`: misma pregunta de fondo (¿el estado
+  externo sigue sincronizado con lo que el fork afirma?), mismo contrato de tres códigos, mismo
+  compromiso de **no mutar nada**. Responde si la branch protection de la rama de despliegue
+  coincide con el contrato esperado. Solo hace GET: **ninguna llamada suya usa `-X`**, y el
+  `gh api -X PUT ...` que imprime como remedio **jamás lo ejecuta**. Junto a ese remedio el
+  guion ahora imprime un aviso: `PUT /protection` reemplaza el objeto entero, así que aplicarlo
+  a ciegas borraría en silencio cualquier ajuste que el cliente ya tuviera puesto a propósito.
+  Contrato de salida: **0** = coincide · **1** = deriva real (la rama existe pero no está
+  protegida, o algún campo no cuadra) · **2** = **no se pudo responder** (no hay `gh`, no hay
+  sesión autenticada, el repo o la rama no existen, el token no tiene permiso de admin para
+  leer la protección, o la respuesta de la API es ilegible o incompleta).
+  **La distinción 1/2 es la razón de ser del guion**, y aquí el modo de fallo es más sutil que
+  en sus hermanos: el 404 de `/branches/<rama>/protection` es ambiguo en **tres** sentidos, no
+  dos. Puede significar "la rama no existe" (typo en `REPO`/`RAMA`), "la rama existe y NO está
+  protegida" —deriva real, exit 1— o, medido contra la API real, "la rama existe y SÍ está
+  protegida, pero el token no tiene permiso de **admin** sobre el repo para leer el detalle"
+  —exit 2, no exit 1—. Este tercer caso es el que se confundía con el segundo:
+  `GET /repos/{owner}/{repo}/branches/{rama}/protection` devuelve **404, no 403**, cuando falta
+  ese permiso, así que asumir "404 en `/protection` = no protegida" invierte el resultado justo
+  en el caso que más importa (una réplica de cliente, o un `GITHUB_TOKEN` de CI sin
+  `permissions: administration: read`). Por eso el guion consulta **primero**
+  `/branches/<rama>` —que sí expone `.protected` sin permiso de admin, medido— y usa ese campo
+  como desempate antes de mirar `/protection`: `.protected == false` más 404 en `/protection` es
+  deriva real (exit 1); `.protected == true` más 404 en `/protection` es "no sé" (exit 2), y en
+  ese caso el guion **no** imprime el `PUT` de remedio, porque sugerirlo sobre una rama que sí
+  está protegida sería un consejo destructivo. La rama del 403 (token sin ningún acceso al
+  repo) sigue existiendo como mecanismo secundario, pero ya no es la vía principal a exit 2: el
+  mecanismo real es este 404 ambiguo, desambiguado por `.protected`. Leer el detalle completo
+  de la protección sigue exigiendo un token con `admin` sobre el repo (o
+  `permissions: administration: read` si esto se cablea alguna vez en un workflow).
+  Parametrizable por entorno con defaults de este fork —`REPO="${REPO:-aclicona/licona-saleor}"`
+  y `RAMA="${RAMA:-stable/3.22}"`—, de modo que la réplica de un cliente se verifica sin editar
+  el guion: `REPO=cliente/su-saleor sh scripts/check-branch-protection.sh`. El `/` de la rama se
+  escapa a `%2F` en la ruta de `gh api`. Una sola llamada para los cinco campos, con el `--jq`
+  **embebido de `gh`** (no añade dependencia de un `jq` externo) y emitiendo una línea por campo
+  —no `@tsv`: con `IFS` de tabulador el shell colapsa los campos vacíos y la lectura se
+  desincroniza en silencio. Antes de comparar nada, el guion valida que la salida traiga
+  exactamente cinco líneas y que los campos booleanos no lleguen vacíos; si no, **exit 2,
+  nunca 1** — mismo principio que la guarda de `check-schema-fidelity.sh` ("salida no vacía Y
+  parece un esquema" antes de mirar el diff). Sin esa validación, una respuesta vacía con
+  exit 0 fabricaría cinco derivas, y una truncada a tres líneas desincronizaría los campos en
+  silencio. `sh` POSIX puro, sin `set -e`, como los otros guiones de `scripts/`.
+
+- `saleor/tests/test_fork_branch_protection_drift.py` — **nuevo, sin equivalente en upstream.**
+  Mismo patrón que los tests de deriva que el proyecto ya usa en sus repos hermanos
+  (`test_celery_queues_drift`, `test_smoke_baseline_prompt_drift`): compara dos fuentes que
+  **tienen que** decir lo mismo y se pone rojo el día que se separan. Aquí las dos fuentes son
+  la constante `CONTEXTO_ESPERADO` de `check-branch-protection.sh` y el `name:` del job `puerta`
+  en `.github/workflows/ci-fork.yml` (hoy, las dos: `Puerta rapida`).
+  **Por qué hace falta:** GitHub identifica los required status checks por su **nombre visible
+  literal**, no por el id del job. Un rename inocente del `name:` deja la branch protection
+  esperando **para siempre** un check que ya nunca vuelve a reportarse — y el síntoma no señala
+  la causa: el job sigue verde con su nombre nuevo y el PR o el push se queda colgado sin
+  ningún error. Nada más en la CI avisa de eso.
+  Vive en `saleor/tests/` y no en la raíz porque `setup.cfg` fija `testpaths = saleor`: un
+  archivo fuera de `saleor/` no lo recogería ni un `pytest` sin argumentos ni el job `suite` de
+  `ci-fork.yml`. **No usa base de datos** —solo lee dos archivos de texto—, así que no pide la
+  fixture `db` ni `@pytest.mark.django_db`. Es el **primer test propio del fork**.
+
+**Motivo (por qué, no solo qué):** la branch protection de `stable/3.22` se activó en agosto y
+desde entonces vivía **solo en la configuración de GitHub**. No está versionada, nadie la
+revisa, y —lo que de verdad duele— **al replicar el fork para un cliente simplemente no está,
+sin que nada lo diga**. Es el mismo modo de fallo que ya mordió dos veces en este repo: permiso
+o ajuste implícito que no viaja con el código, se rompe lejos y miente cerca (el `schedule` que
+solo dispara desde la rama por defecto; el "Workflow permissions" que GitHub pone en `read` en
+los repos nuevos). El guion no puede hacer que la protección viaje —eso GitHub no lo permite—,
+pero sí convierte el silencio en una **afirmación verificable**: la réplica puede preguntar y
+obtener un sí o un no, con el comando de arreglo impreso.
+
+**Contrato afirmado** (verificado el 2026-09-25 contra el repo real; coincide exactamente):
+
+| Campo | Esperado | Consecuencia si cambia |
+|---|---|---|
+| `required_status_checks.contexts` | `["Puerta rapida"]` | Vacío: ningún check gatea el merge. Otro nombre: la rama espera un check que nunca llega y el merge queda bloqueado para siempre |
+| `required_status_checks.strict` | `false` | En `true` exige la rama al día con la base antes de mergear |
+| `enforce_admins.enabled` | `false` | **No es cosmético.** En `true` el push directo de despliegue queda en **deadlock permanente**: la vía real de despliegue de este fork es push directo a `stable/3.22`, sin PR |
+| `allow_force_pushes.enabled` | `true` | En `false` bloquea **también a los admins** y rompe el rollback con `git push --force-with-lease` |
+| `allow_deletions.enabled` | `false` | En `true` cualquiera con permiso de push puede borrar la rama de despliegue |
+
+El guion no se limita a nombrar el campo que no cuadra: imprime **esperado vs encontrado y la
+consecuencia concreta** de esa tabla, y acumula todas las derivas en una sola corrida en vez de
+cortar en la primera.
+
+**Límite de esa afirmación:** el guion valida esos cinco campos y **solo** esos. La API
+devuelve más —`lock_branch`, `restrictions`, `required_pull_request_reviews`,
+`required_conversation_resolution`, entre otros— y un exit 0 no afirma nada sobre ellos: un
+repo con `lock_branch: true`, o con `restrictions` que excluya al usuario que hace el
+despliegue, pasa en verde con el push de despliegue bloqueado. Ampliar la cobertura a los 11
+campos queda en el backlog, no en este commit.
+
+**No se tocó la configuración real de GitHub.** Los tres códigos de salida se ejercitaron contra
+ramas que ya existían: `stable/3.22` para el 0, la rama `3.22` (existente y sin protección, como
+las otras 67) para el 1, y una rama inexistente para el 2.
+
+**Conflicto potencial al actualizar upstream:** **ninguno.** Ninguno de los dos archivos existe
+en upstream y ninguno toca un archivo de upstream —el test es un archivo nuevo con nombre propio
+(`test_fork_*`) dentro de un directorio que ya existía—, así que no hay nada del otro lado con
+qué chocar. En un re-fork limpio se copian con el resto de `scripts/`.
+
+---
+
+### 2026-09-26 — Guion de los cuatro ajustes de GitHub que no se clonan (base: 3.22.71)
+
+**Archivos añadidos:**
+
+- `scripts/check-github-settings.sh` — **nuevo, sin equivalente en upstream.** Cuarto hermano de
+  `check-migrations.sh`, `check-schema-fidelity.sh` y `check-branch-protection.sh`: misma pregunta
+  de fondo (¿el estado externo sigue diciendo lo que el fork afirma?), mismo contrato de tres
+  códigos, mismo compromiso de **no mutar nada** —solo `GET`, **ninguna llamada suya usa `-X`**—.
+  Cubre los cuatro ajustes que la REGLA DEL FORK del 2026-09-03 enumera como «no se clonan» y que
+  `check-branch-protection.sh` dejó fuera: workflows deshabilitados, *Workflow permissions*,
+  aprobación de workflows en PR de fork y secrets. Parametrizable igual que su hermano
+  —`REPO="${REPO:-aclicona/licona-saleor}"`—, para que la réplica de un cliente se verifique sin
+  editar el guion: `REPO=cliente/su-saleor sh scripts/check-github-settings.sh`. `sh` POSIX puro,
+  sin `set -e`, con el `--jq` **embebido de `gh`** (no añade dependencia de un `jq` externo).
+  Contrato de salida: **0** = los dos ajustes con gate coinciden · **1** = deriva real en alguno de
+  esos dos · **2** = **no se pudo responder** (no hay `gh`, no hay sesión autenticada, el repo no
+  existe, el token no tiene permiso, o la respuesta de la API es ilegible o incompleta).
+
+  **Aquí NO hay 404 ambiguo, y es exactamente lo contrario de su hermano — leer esto antes de
+  copiar el mecanismo de `.protected`.** `check-branch-protection.sh` necesitó un desempate
+  —consultar `/branches/<rama>` y usar `.protected`— porque
+  `GET /branches/{rama}/protection` devuelve **404, no 403**, cuando falta el permiso de admin, y
+  ese 404 se confunde con «la rama no está protegida». **En este guion ese problema no existe, y se
+  midió para saberlo:** con un token sin `admin`, los tres endpoints con permiso restringido
+  responden **403 limpio** —comprobado contra `saleor/saleor`, `cli/cli` y `microsoft/vscode`—,
+  nunca un 404 confundible con «no está configurado». **Consecuencia de diseño: la única vía a
+  exit 1 es un `200` con un valor distinto del esperado, y todo fallo de llamada —403, 404, 5xx,
+  salida ilegible— es exit 2, sin desempate y sin heurística.** No replicar aquí el mecanismo de
+  `.protected` por analogía con B-548: sería complejidad sin causa, y una heurística de más es una
+  vía de más a un veredicto equivocado.
+
+  **Asimetría de permisos, medida:** `GET /actions/workflows` **no exige admin** —funciona en la
+  réplica de un cliente aunque el operador no lo sea—; los otros tres sí. Es el único de los cuatro
+  que una réplica puede verificar sin privilegios, y por eso su afirmación es la que de verdad
+  viaja.
+
+  **GOTCHA con dientes — `/actions/workflows` devuelve 24 entradas para 23 archivos.** La extra es
+  `dynamic/dependabot/update-graph` (`Dependency Graph`): un pseudo-workflow **sin archivo en el
+  árbol**, que GitHub registra por su cuenta. Sin filtrar por `path` que empiece por
+  `.github/workflows/`, el guion fabrica una deriva falsa **el día uno**. Con el filtro puesto, el
+  cruce contra el árbol da **cero delta** en este fork.
+
+  **Y al revés: `state: active` NO implica que el archivo exista.** En `saleor/saleor` hay **cuatro
+  workflows en `active` cuyo archivo está borrado**, uno desde **2024-09-13**: GitHub **nunca** los
+  transiciona a `deleted`. Por eso el cruce se hace en **las dos direcciones** —registro sin archivo
+  y archivo sin registro—, no solo en la que parece obvia. Este fork ya conocía la cara opuesta:
+  `tests-and-linters.yml` está en `deleted` con el archivo presente en el árbol.
+
+  **El enum de `state` tiene CINCO valores, no dos**, verificado contra
+  `github/rest-api-description`: `active`, `deleted`, `disabled_fork`, `disabled_inactivity` y
+  `disabled_manually`. En vivo solo se han observado `active` y `disabled_manually`. Los otros tres
+  se tratan igual —cualquier cosa que no sea `active` en uno de los tres propios es deriva— para no
+  quedarse corto el día que aparezca `disabled_inactivity`, que GitHub aplica **solo**, sin que
+  nadie toque nada.
+
+  **El manejo de errores no se puede derivar de la especificación.** El OpenAPI declara **solo
+  `200`** para `actions/permissions/workflow`, `actions/secrets` y `actions/workflows`, y los tres
+  devuelven **403 real** cuando falta permiso. `fork-pr-contributor-approval` es el **único** con un
+  `404` documentado en el OpenAPI, y **no se pudo provocar** en ninguna medición; se mapea a 2, que
+  es la respuesta conservadora. Dicho de otro modo: los códigos que este guion trata son los
+  **medidos**, no los publicados.
+
+- `saleor/tests/test_fork_github_settings_drift.py` — **nuevo, sin equivalente en upstream.** Mismo
+  patrón que `test_celery_queues_drift` y `test_fork_branch_protection_drift`: compara dos fuentes
+  que **tienen que** decir lo mismo y se pone rojo el día que se separan. Sostiene la parte del
+  contrato que **el árbol sí puede afirmar** y la API no debería. Cinco tests sobre las dos
+  constantes del guion, `WORKFLOWS_PROPIOS` y `SECRETS_ESPERADOS`:
+
+  1. Cada ruta de `WORKFLOWS_PROPIOS` **existe** como archivo. Es el isomorfo exacto del fallo que
+     B-548 vigila con el `name:` del job `puerta`: si alguien borra un workflow del árbol y no toca
+     la constante, el guion exigiría para siempre el `active` de un archivo inexistente — un exit 1
+     inarreglable.
+  2. Cada uno de esos workflows **declara su bloque `permissions:`** (a nivel raíz o en todos sus
+     jobs). **Es el test más valioso de los cinco**, porque nada más en la CI protege ese bloque:
+     borrarlo devuelve el workflow al ajuste no versionado **en silencio**, que es el fallo entero
+     que el comentario de `ci-fork.yml` fue escrito para prevenir — y ese comentario sobreviviría
+     intacto al cambio que lo invalida.
+  3. Todo `${{ secrets.X }}` con `X` distinto de `GITHUB_TOKEN` en un workflow propio está en
+     `SECRETS_ESPERADOS` (hoy: conjunto vacío). Esta es la afirmación verificable que está **detrás**
+     del `total_count == 0` de secrets, y la razón de que ese endpoint se quede en informativo: lo
+     que importa no es cuántos secrets haya puestos, sino que el árbol no necesite ninguno. Recorre
+     el **YAML cargado, no un regex sobre el texto crudo** — `ci-fork.yml` nombra
+     `secrets.GITHUB_TOKEN` dentro de un **comentario**, y un regex lo leería como uso real. El
+     falso positivo está demostrado en las dos direcciones en la verificación del turno.
+  4. Ninguna entrada esperada cae fuera de `.github/workflows/`, que blinda el gotcha de la entrada
+     sintética `dynamic/dependabot/update-graph`.
+  5. Guarda mínima, espejo de `test_guion_y_job_existen`: el guion existe y sus dos constantes se
+     leen y no están vacías. Distingue «falta la pieza» de «las dos fuentes se separaron».
+
+  **Lo que este test deliberadamente NO afirma, y conviene saberlo:** la dirección inversa —que todo
+  workflow del árbol esté en `WORKFLOWS_PROPIOS`—. No hay en el árbol un discriminador fiable entre
+  «propio del fork» y «heredado de upstream», y el de `git log` no sirve porque los tres jobs de
+  `ci-fork.yml` usan `actions/checkout@v5` **sin `fetch-depth`**, o sea profundidad 1. Queda escrito
+  en el docstring en vez de inventar un marcador nuevo. Vive en `saleor/tests/` porque `setup.cfg` fija
+  `testpaths = saleor` —un archivo fuera de `saleor/` no lo recogería ni un `pytest` sin argumentos
+  ni el job `suite` de `ci-fork.yml`—. **No usa base de datos**: solo lee archivos de texto, así que
+  no pide la fixture `db` ni `@pytest.mark.django_db`.
+
+**Motivo (por qué, no solo qué):** el 2026-09-25 `check-branch-protection.sh` convirtió **uno** de
+los cinco ajustes no versionables que enumera la REGLA DEL FORK —la protección de rama— de supuesto
+en afirmación verificable. Los otros cuatro seguían exactamente igual que antes: rompen lejos,
+mienten cerca, y no había nada en el árbol que avisara. El modo de fallo de *Workflow permissions*
+ya estaba **documentado y medido** en este repo desde agosto: `ci-fork.yml` lleva un bloque
+`permissions:` explícito **precisamente porque** el ajuste de repo no viaja, y en una réplica sin él
+`actions/upload-artifact` fallaría con 403 y tumbaría el job `suite` **entero** — un run donde los
+17k tests pasaron se vería como suite fallida. Lo que faltaba no era saber cómo se rompe: era que
+alguien lo preguntara. Este guion es además la **lista de verificación ejecutable al replicar el
+fork para un cliente**, que hasta hoy no existía en ninguna parte, ni siquiera en prosa.
+
+**Contrato del guion** (valores medidos el 2026-09-26 por dos frentes independientes, que
+coincidieron):
+
+| Ajuste | Endpoint (`GET`) | ¿Exit 1? | Qué afirma · consecuencia medida |
+|---|---|---|---|
+| Workflows deshabilitados | `/actions/workflows` | **SÍ** | Los tres propios (`ci-fork.yml`, `sync-upstream.yml`, `security-scan.yml`) en `active`, y ninguno de los 23 del árbol deshabilitado. Uno de los tres en `disabled_*`: la verificación del sync o la suite dejan de correr **sin ningún error**, igual que ya pasa con el `deleted` de `tests-and-linters.yml` |
+| *Workflow permissions* | `/actions/permissions/workflow` | **SÍ** | `default_workflow_permissions == "read"`. En `write`, el repo concede a todo workflow sin bloque `permissions:` mucho más de lo que necesita — incluidas las maquinarias de upstream que el fork no usa |
+| Aprobación de PR de fork | `/actions/permissions/fork-pr-contributor-approval` | NO | Solo imprime `approval_policy`. Sin consecuencia medible en este fork: cero secrets, despliegue por push directo, y el único autor automático de PRs es `GITHUB_TOKEN`, al que la política **no gatea en ninguno de sus tres valores** |
+| Secrets | `/actions/secrets` | NO | Solo lista nombres y `total_count`. Un `total_count` mayor que cero es **información** («hay secrets de más»), no avería: afirmarlo degradaría el significado del verde |
+
+**El guion nace en exit 1 sobre este repo, y es A PROPÓSITO. No lo "arregles" cambiando el esperado
+a `write`.** El valor medido hoy en `aclicona/licona-saleor` es `default_workflow_permissions=write`,
+así que la primera corrida sale en **1**. Eso no es un bug del guion ni un falso positivo: es la
+deriva que el guion existe para delatar, y se cierra con **un toggle en la UI de GitHub**, no
+editando la constante. Ruling de Fable del 2026-09-26, literal:
+
+> El contrato tiene que decir lo que el fork **necesita**, no lo que **tiene**: los tres workflows
+> propios llevan `permissions:` explícito y son inmunes, así que el fork no necesita `write`, y una
+> réplica de cliente que nazca en el default de GitHub (`read`) **debe salir verde**, que es
+> justamente el caso de uso del guion. El rojo de hoy en este repo es deriva real y accionable (un
+> toggle), no un falso positivo; las dos maquinarias de upstream que dejarían de funcionar en `read`
+> (`bump-dependencies.yml`, `create-tag-with-release-pr.yml`) no las usa el fork, y que dejen de
+> disparar con permisos que nadie les concedió es consecuencia deseable, no avería.
+
+La inmunidad de los tres workflows propios está **medida**, no supuesta: `ci-fork.yml:26-28`,
+`sync-upstream.yml:47-61` y `:557-559`, y `security-scan.yml:12-14` declaran su `permissions:` por
+job, así que el ajuste de repo no los alcanza. En el mismo turno se corrigió la REGLA DEL FORK en
+`memory/saleor-api/README.md` para que fije `read` en vez de limitarse a nombrar el ajuste: la regla
+y el guion no pueden contradecirse. **No es el mismo commit** porque `memory/` vive en el repo raíz
+de `ecommerce`, no en este; sí es el mismo turno.
+
+**Los otros valores medidos**, que el guion imprime sin afirmar: `can_approve_pull_request_reviews`
+= `true`, `approval_policy` = `first_time_contributors`, secrets `total_count` = `0`, y 24 workflows
+en `active`. `can_approve_pull_request_reviews` merece un párrafo propio aunque no se afirme: en
+`false` **rompe el `gh pr create` de `sync-upstream.yml` en el último paso**, con la rama ya empujada
+y la suite ya disparada. El sync se queda sin PR, invisible para quien solo mira PRs abiertos, y se
+repite igual **cada lunes**. Se imprime para que quien lea la salida lo vea; no se afirma porque su
+valor por defecto no es el que el fork necesita en todas las réplicas.
+
+**Desempate descartado por medición, para que nadie lo reintente.** Se consideró inferir la política
+de PR de fork desde `/actions/runs?status=action_required` cruzado con `head_repository.fork`. **No
+sirve:** `head_repository.fork` es `true` para **cualquier** rama de un repo que *sea* fork, y los 8
+runs en `action_required` de este fork tienen `head_repository == repository` —son PRs del mismo
+repo—. La causa real de esos runs es la salvaguarda antibucle del `GITHUB_TOKEN` que `ci-fork.yml`
+ya documenta, no la política de aprobación. La señal no discrimina; por eso ese ajuste se queda en
+informativo y no en afirmación.
+
+**Límite de esa afirmación:** el guion pone en rojo **dos** ajustes y solo dos. Los otros dos se
+imprimen, y un exit 0 **no afirma nada** sobre ellos: un repo con `approval_policy` restrictiva, con
+secrets de sobra o con `can_approve_pull_request_reviews` en `false` pasa en verde. Tampoco afirma
+nada sobre los ajustes de GitHub que ninguno de los cuatro endpoints cubre (Dependabot, entornos,
+reglas de merge). El verde de este guion significa «los dos ajustes que rompen la CI en silencio
+están bien», no «el repo está bien configurado».
+
+**No se tocó la configuración real de GitHub.** Todas las mediciones son `GET`. El
+`default_workflow_permissions=write` de hoy se deja **tal cual**: cambiarlo es una decisión de
+consola que le corresponde a Andrés, y el guion ya la delata cada vez que corre.
+
+**Conflicto potencial al actualizar upstream:** **ninguno.** Ninguno de los dos archivos existe en
+upstream y ninguno toca un archivo de upstream —el test es un archivo nuevo con nombre propio
+(`test_fork_*`) dentro de un directorio que ya existía—, así que no hay nada del otro lado con qué
+chocar. En un re-fork limpio se copian con el resto de `scripts/`. Lo que **sí** puede cambiar con
+un sync es el **conteo de 23 workflows** del árbol: un workflow nuevo de upstream lo mueve, y el
+cruce en las dos direcciones lo delata como deriva. Es el comportamiento deseado —hay que mirarlo—,
+no una avería del guion.
+
+---
+
+## Pendiente de upstream
+
+| Tema | Estado a fecha 2026-09-26 (3.22.71 / 3.23.36) |
+|---|---|
+| Fix de `discount.0052` para PostgreSQL 15+ | **Corregido en upstream, pero solo en la línea 3.23.** Verificado el 2026-09-26: el commit `f47392d874` arregla el mismo bug con un enfoque más preciso (dropea solo constraints FK/UNIQUE, en lugar de tragarse cualquier excepción), y lo hace **modificando la migración 0052 in-place** — `git diff --name-status 3.22.71 3.23.36 -- saleor/discount/migrations/` → `M saleor/discount/migrations/0052_drop_sales_constraints.py` (y `M .../0045_promotions.py`) — pero ese commit **no es ancestro de `3.22.71`**: solo existe en 3.23. Dentro de 3.22 nuestro parche **sigue siendo necesario** — no volver a auditarlo desde cero, solo confirmar en el próximo sync que sigue sin backportearse. **Trampa para el salto a 3.23:** Django no reejecuta una migración ya aplicada, así que el fix de upstream **no correrá** sobre una base ya migrada, y nuestra versión del parche se tragaba *cualquier* excepción (`exception when others then null`), sin garantía de que los constraints se hubieran soltado de verdad. → Antes del salto, verificar en la base de datos real que los constraints objetivo ya no existen: es la única parte del salto que puede haber dejado la BD en un estado distinto del que el código supone. |
+
+## Deuda del fork
+
+| Tema | Detalle |
+|---|---|
+| — | Sin deuda abierta. (`python-dotenv` transitivo: **resuelto el 2026-08-22**.) |
+
+---
+
+## Historial de actualizaciones de upstream
+
+| Fecha | De | A | PR | Notas |
+|---|---|---|---|---|
+| 2026-04-16 | — | 3.22.48 | — | Versión base inicial del fork |
+| 2026-08-24 | 3.22.48 | 3.22.67 | [#3](https://github.com/aclicona/licona-saleor/pull/3) | 19 parches. **Dos CVE**: 2026-48744 (bypass de autorización) y 2026-44472 (secuestro de fusión de cuentas). Único conflicto `uv.lock`, regenerado. 3 migraciones, ninguna destructiva. Cero breaking changes de GraphQL. Ver [bitácora](../docs/hardening/sessions/2026-08-24-sync-upstream-3.22.67.md) |
+| 2026-09-25 | 3.22.67 | 3.22.71 | — | 4 parches (3.22.68..3.22.71). **Un parche de seguridad**: mitigación de DoS por *decompression bomb* de imagen (CWE-409), nuevo `MAX_IMAGE_PIXELS` con valor por defecto 30 M px (admite 5000×5000 con margen; Pillow recibe la mitad del valor a propósito). Ningún CVE/GHSA anunciado para el rango. Único conflicto `uv.lock`, regenerado. Bumps `cryptography` 50.0.1, `pyjwt` 2.15.0, `sqlparse` 0.6.0. `product/0173` modificada (no nueva: no se re-ejecuta). Cero cambios en `schema.graphql`. |
+
+---
+
+## Cambios de comportamiento heredados de upstream (no son parches nuestros)
+
+Un sync no solo trae fixes: trae **cambios de comportamiento que nadie pidió**. Estos son
+los del rango `3.22.48 → 3.22.67`, auditados el 2026-08-24. Ninguno rompe hoy, pero los
+tres cambian lo que la API hace.
+
+| Cambio | Qué cambia | ¿Nos toca hoy? |
+|---|---|---|
+| **`accountConfirmMergeMode`** (fix de CVE-2026-44472, migración `site.0041`) | El campo nace en `merge_disabled`, así que `confirmAccount` **deja de asociar** a la cuenta los pedidos y gift cards hechos como invitado. Antes lo hacía siempre — que era justo el CVE. | **No.** El storefront no usa `confirmAccount` en ninguna parte: la auth de clientes es la Fase 4. **Pero cuando la Fase 4 llegue, el default habrá cambiado en silencio.** Ver el ítem del backlog y el ruling de Fable en la bitácora del 2026-08-24. |
+| **Desempate de cursores** (`saleor/graphql/utils/sorting.py`) | Los cursores de paginación ganan un componente `pk`. Los cursores emitidos **antes** del deploy se rechazan con `Received cursor is invalid.` | **No.** Verificado: el storefront pasa `after: null` y solo usa `endCursor` dentro de la misma sesión (`app/pages/categoria/[slug].vue:69`, `all.vue:64`). No persiste cursores en URL ni en `localStorage`. |
+| **Filtros de atributos** | `products`/`pages` dejan de matchear valores de atributos **desasignados** del product type. Un filtro que devolvía N productos puede devolver menos. | **No.** El storefront no filtra por atributos: sus dos queries (`products.graphql`, `categories.graphql`) no usan `attributes:`. |
+
+⚠️ El default de `account_confirm_merge_mode` lo calcula la migración `0041` **en tiempo
+de migración**, a partir de `settings.ACCOUNT_CONFIRM_ASSOCIATE_ANONYMOUS_OBJECTS`. Sobre
+una instancia ya migrada, cambiar ese setting es un **no-op**: el único mecanismo que
+funciona es la mutación `shopSettingsUpdate(accountConfirmMergeMode: ...)`.
+
+---
+
+## Cuánto divergimos de upstream — medido, no estimado
+
+Esto es lo que hace manejable cada actualización, y conviene volver a medirlo antes de
+cada upgrade (`git diff --numstat <tag-base> stable/3.22`):
+
+**Remedición del 2026-08-24, contra `3.22.67` (tras el sync): la divergencia NO creció.
+Siguen siendo ~20 líneas de código de Saleor, exactamente las mismas.**
+
+| Archivo | Líneas | Qué es |
+|---|---|---|
+| `manage.py` | +3 | `load_dotenv()` |
+| `saleor/asgi/__init__.py` | +4 | `load_dotenv()` |
+| `saleor/celeryconf.py` | +3 | `load_dotenv()` |
+| `pyproject.toml` | +1 | `python-dotenv` como dependencia directa |
+| `saleor/discount/migrations/0052_drop_sales_constraints.py` | +7 −3 | fix PostgreSQL 15+ |
+| `uv.lock` | +2 | consecuencia de la anterior |
+| `Dockerfile` | +16 −2 | `netcat-openbsd` + `ENTRYPOINT` de Railway |
+
+Que la divergencia **no crezca** tras absorber 19 parches es el dato que importa: es lo
+que mantiene viva la estrategia A (re-fork limpio) para el salto a 3.23. Medido con
+`git diff --stat 3.22.67 stable/3.22 -- . ':!.github' ':!AGENTS.md'` — todo lo demás son
+archivos que upstream no tiene.
+
+Todo lo demás son **archivos que upstream no tiene** —`railway.json`,
+`scripts/railway-entrypoint.sh`, `scripts/wait-for-db.sh`, `scripts/check-migrations.sh`,
+`scripts/check-schema-fidelity.sh`, `scripts/check-branch-protection.sh`,
+`saleor/tests/test_fork_branch_protection_drift.py`,
+este archivo, nuestros tres workflows, `docs/superpowers/`— y **no pueden conflictuar**:
+no hay nada del otro lado con qué chocar.
+
+**El producto no vive en este repo.** `storefront` y `saleor-apps` hablan con Saleor por
+GraphQL, no por sus internals. Por eso el riesgo de un upgrade está en **el esquema
+GraphQL**, no en este fork.
+
+### Los tres conflictos previsibles
+
+| Archivo | Por qué | Cómo se resuelve |
+|---|---|---|
+| `AGENTS.md` | Reemplazamos el de upstream entero | **Automático** vía `merge=ours` en `.gitattributes` — requiere `git config merge.ours.driver true` (ver abajo) |
+| `uv.lock` | Upstream lo marca `-merge`: siempre conflictúa, a propósito | **Regenerar**, no resolver, y **partiendo del lock de upstream** (`git checkout <tag> -- uv.lock`) para heredar sus versiones: `uv tool run uv@<version-que-pinea-el-Dockerfile> lock` |
+| `0052_drop_sales_constraints.py` | Único cambio nuestro con lógica propia | **Revisar a mano** si upstream tocó esa migración. Es el único que merece atención real |
+
+> **Nota (2026-09-26):** la medición real contra `3.23.36` (ver "Medición del salto 3.22 → 3.23" más abajo) encontró conflictos distintos de los previstos aquí: los 3 atribuibles al fork fueron `.env.example`, `Dockerfile` y `.github/workflows/test-env-cleanup-cron.yml` — no `AGENTS.md` —que sí difiere mucho de upstream (+70/−418 líneas contra `3.23.36`), así que su ausencia se atribuye al `merge=ours` de `.gitattributes`, **sin haberlo confirmado**— ni `0052_drop_sales_constraints.py` (esa migración cambió en upstream, pero solo en 3.23 — ver "Pendiente de upstream"). Útil como intuición inicial; la medición manda.
+
+## Medición del salto 3.22 → 3.23 (2026-09-26, reporte B-578)
+
+Complementa la remedición del 2026-08-24 (arriba): aquella medía ~20 líneas de código de Saleor
+contra `3.22.67` y excluía configuración; esta mide el **payload completo a reaplicar** contra
+`3.22.71`, contrastado con `3.23.36` — por eso las cifras difieren entre ambas.
+
+### El estado de soporte de upstream — el dato que fija el plazo
+
+- `SECURITY.md` de upstream, tabla textual: `≥ 3.22` soportada, `< 3.22` no. → **3.22 es la línea
+  más antigua todavía soportada.**
+- Historial del archivo: *"Remove 3.20 from supported versions"* el 2026-04-17; **"Remove 3.21 from
+  supported versions" el 2026-09-23** (diff verificado: `≥ 3.21` → `≥ 3.22`).
+- **Matiz que importa:** la retirada de 3.21 **no coincidió con el lanzamiento de ninguna línea
+  nueva** (3.24 no existe: rama 404, sin releases ni tags). Cuando salió 3.23.0 la tabla pasó a
+  `≥3.21` = 3 líneas soportadas; el 2026-09-23 pasó a `≥3.22` = **2 líneas**. Upstream **recortó la
+  ventana de soporte de 3 líneas a 2**, por decisión propia y sin aviso.
+- Ritual de retirada observado: sale de `SECURITY.md` → una release final → **la rama se borra**
+  (`3.19`, `3.20`, `3.21` → las tres dan 404 hoy).
+- **3.22 está plenamente viva hoy:** `3.22.71` publicada 2026-09-24T09:06:08Z y `3.23.36`
+  2026-09-24T09:06:43Z → **35 segundos de diferencia**. Cadencia de 3.22 en 90 días: 18 releases,
+  una cada ~5 días, hueco máximo 13 días.
+- **Cero CVEs sin parchear**: los 16 advisories del repo upstream revisados uno a uno; todos con
+  parche en una `3.22.x` por debajo de 3.22.71. **Ningún fix de seguridad existe solo en 3.23+.**
+- Eje 2 (rezago de línea menor) = **170 días exactos**: `3.23.0` se publicó el 2026-04-09.
+- `upstream/main` está en `3.24.0-a.0` desde el 2026-03-25 (185 días de gestación). Cadencia
+  histórica de minors: 313 / 142 / 181 días. **Dispersión demasiado ancha para predecir una
+  fecha — no la inventes.**
+- **Conclusión de plazo:** el plazo no es una fecha, es un **evento** — la publicación de Saleor
+  3.24.0. Ese día 3.22 pasa a estar dos líneas por detrás y la garantía de backport de upstream
+  (*"Saleor backports most of patches to at least one version behind"*, nota de release de 3.23.0)
+  deja de cubrirla.
+
+### El coste, medido
+
+- Divergencia real a reaplicar: **+84 / −13 líneas** (`Dockerfile`, `manage.py`, `pyproject.toml`,
+  `.env.example`, `.gitattributes`, `.gitignore`, `saleor/asgi/__init__.py` y
+  `saleor/celeryconf.py`), más 18 archivos propios que upstream no tiene y **no pueden
+  conflictuar**.
+- **No hay personalizaciones de negocio en el fork**: Wompi, COP e impuestos viven en
+  `saleor-apps/`, fuera de este repo.
+- **Conflictos medidos en memoria** con `git merge-tree --write-tree` (no toca el árbol), usando un
+  control que aísla nuestra contribución:
+  - `3.23.36` × nuestro fork (`origin/stable/3.22`) → **210 conflictos**
+  - `3.23.36` × upstream puro (`3.22.71`, sin fork) → **208 conflictos**
+  - → **solo 3 son atribuibles al fork**: `.env.example`, `Dockerfile` y
+    `.github/workflows/test-env-cleanup-cron.yml`
+  - 124 de los 210 están en `saleor/graphql`, con base de fusión de 2025-10-01: son divergencia
+    **entre dos líneas de release**, no entre upstream y nosotros.
+  - **Esto confirma la estrategia A (re-fork) y descarta la B (merge) con números**: los 208
+    conflictos inherentes tienen todos la misma resolución correcta ("tomar 3.23"), así que
+    resolverlos a mano sería ruido puro con riesgo de error humano.
+- **Migraciones:** 65 reales, en 12 apps. Las **3 destructivas usan `SeparateDatabaseAndState`** →
+  en 3.23 no borran nada en BD, solo sueltan FKs; el borrado real está **diferido a 3.24**
+  (comentario literal en `product/0204`: *"Will be dropped from the actual DB in Saleor v3.24.0"*).
+  10 índices concurrentes con el patrón correcto. **Sin migraciones propias del fork** → cero
+  colisión de numeración.
+- **11 backfills se delegan a Celery** vía `post_migrate` → `.delay()`. **Riesgo principal del
+  salto:** el `migrate` termina en segundos y *parece* completo, pero el trabajo real lo hace el
+  worker después; si el worker no está arriba **con sus colas**, los datos quedan incompletos
+  **sin un solo error**. → El criterio de aceptación **no puede ser "migrate terminó"**: tiene que
+  ser una consulta por backfill (filas con el campo destino nulo = 0) después de que el worker
+  drene.
+- **Esquema GraphQL:** +5525 / −3820 líneas; 1428 → 1476 definiciones top-level. Lo eliminado son
+  dos familias **ya deprecadas en 3.22**: `DigitalContent*` y `AppExtension*` legacy.
+- **Los tres consumidores cruzados contra el delta por intersección de conjuntos: cero roturas.**
+  `storefront` (14 operaciones), `saleor-apps` (7 webhooks con `subscriptionQuery` +
+  `transactionEventReport`) y `scripts/seed/seed.py` (33 campos, el mayor del monorepo).
+  Verificados idénticos en ambos tags los dos puntos de mayor riesgo:
+  `ShippingListMethodsForCheckout` y la firma de `transactionEventReport`. Ambos manifiestos de
+  app declaran `extensions: []`, así que la remoción de `AppExtension` no toca nada.
+- **Runtime sin cambios:** `requires-python >=3.12,<3.13` y `django[bcrypt]~=5.2.17` idénticos en
+  ambos tags. No hay que tocar el toolchain.
+
+### Deuda del storefront: qué se puede adelantar y qué no
+
+Verificado con `git show <tag>:saleor/graphql/schema.graphql` sobre el `type Checkout`:
+
+- `shippingMethods` **ya existe en 3.22.71** (y `availableShippingMethods` ya está deprecado ahí).
+  → **la migración `availableShippingMethods` → `shippingMethods` se puede hacer HOY sobre 3.22**,
+  desacoplada del salto.
+- `delivery` **NO existe en 3.22.71**; aparece solo en 3.23.36, que a su vez deprecia
+  `deliveryMethod` en favor de `delivery`. → **`deliveryMethod` → `delivery` NO se puede adelantar:
+  rompería producción.** Es trabajo post-salto.
+- 3.23 no rompe ninguna de las dos. **Las rompe 3.24.**
+
+### Lo que NO está medido (no estimarlo)
+
+- Duración real de las migraciones: falta el conteo de filas de las tablas con backfill (Postgres
+  local y Railway estaban apagados durante la medición).
+- Variables de entorno reales de producción: no se pudo confirmar si algún plugin retirado en 3.23
+  está activo.
+- El cambio de "media por URL externa" a asíncrono (devuelve 503 mientras procesa): no probado
+  contra `scripts/seed/seed.py`.
+- **Estas tres son precondiciones del plan de ejecución, no notas al pie**: sin ellas no hay
+  ventana de mantenimiento que proponer.
+
+### Punto ciego de instrumentación
+
+Hoy **nada alarma por el eje 2**: `scripts/distancia-upstream/distancia.py` reporta el eje 2 pero
+**por diseño no afecta su código de salida**, y el único aviso es el issue automático
+`upstream-minor` del fork, abierto desde 2026-08-23 y con el contenido ya rancio (dice "3.23.28"
+cuando hoy es 3.23.36). El evento que de verdad importa — que **3.22 salga de `SECURITY.md`**, que
+**aparezca la rama/tag `3.24`**, o que **se borre la rama `3.22`** — no lo vigila nadie.
+
+---
+
+## Decisión: el salto 3.22 → 3.23 está autorizado (2026-09-26, reporte B-584)
+
+El dueño del repo autorizó el salto el **2026-09-26**, sobre la medición de la sección anterior.
+Queda escrito aquí, y no solo en el backlog, porque quien mantenga el fork tiene que poder leer el
+alcance de la autorización sin abrir otra herramienta.
+
+**Qué se autorizó:**
+
+- El salto **3.22 → 3.23**, por **estrategia A (re-fork limpio)** — la medición de conflictos de la
+  sección anterior la confirma y descarta la B: de los 210 conflictos contra el fork **solo 3 son
+  atribuibles a él** (el control contra upstream puro da 208). El resto es divergencia entre dos
+  líneas de release, y toda ella tiene la misma resolución correcta: tomar 3.23.
+- Ejecutado **por partes**, no en un solo paso.
+- **Verificado en local antes de cualquier despliegue.**
+
+**Qué NO autoriza:**
+
+- **No autoriza tocar producción.** El despliegue es la parte 4/4 y **exige una ventana declarada en
+  el reporte B-523**. Nada de lo autorizado aquí habilita un deploy.
+- **El salto directo a 3.24 se evaluó y se descartó.** Habría significado estrenar una línea recién
+  publicada acumulando dos saltos de minor y los borrados destructivos —los que 3.23 difiere vía
+  `SeparateDatabaseAndState`— en un único despliegue.
+
+### El plan, en cuatro partes
+
+| Parte | Reporte | Qué cierra |
+|---|---|---|
+| 1/4 | **B-584** | Esta decisión: la autorización y su alcance, por escrito |
+| 2/4 | **B-588** | Rama `stable/3.23` por estrategia A (re-fork), verificada en local |
+| 3/4 | — | `storefront` contra el esquema nuevo (`codegen` + `deliveryMethod` → `delivery`) y smoke de `saleor-apps` (7 webhooks + `transactionEventReport`) |
+| 4/4 | **B-523** | Re-apuntado de las 6 referencias, rama por defecto de GitHub, cierre del issue #1, y el despliegue con su ventana declarada |
+
+Reportes independientes, que no bloquean el salto: **B-585** (deuda del storefront, adelantable
+sobre 3.22), **B-586** (detector del eje 2), **B-587** (precondiciones medibles).
+
+### La precondición que sigue sin cumplirse
+
+Las cifras de **B-587** no existen todavía, y sin ellas **no hay ventana de mantenimiento que
+proponer**:
+
+- **Conteo de filas** de las tablas con backfill.
+- **Duración real de las migraciones**, medida, no estimada.
+- **Verificación en la base de datos** de que los constraints de `discount/0052` ya se soltaron.
+  Upstream modificó esa migración **in-place**, y **Django no reejecuta una migración ya aplicada**:
+  que el archivo nuevo haga lo correcto no dice nada sobre una instancia que ya la corrió. Hay que
+  consultar el estado real de los constraints en la BD, no leer el archivo.
+
+### El riesgo que se olvida: los backfills diferidos a Celery
+
+Está medido arriba y se repite aquí porque es el que se pasa por alto al ejecutar: **11 de las 65
+migraciones delegan su backfill a Celery** (`post_migrate` → `.delay()`). El `migrate` termina en
+segundos y *parece* completo, pero el trabajo real lo hace el worker después. Si el worker no está
+arriba **con sus colas**, los datos quedan incompletos **sin un solo error**.
+
+→ El criterio de aceptación **no puede ser «migrate terminó»**: tiene que ser **una consulta por
+backfill, después de drenar la cola**.
+
+### El tag objetivo se elige en el momento de ejecutar
+
+Hoy el candidato es **`3.23.36`**, que es contra el que se midió todo. Si al ejecutar la parte 2/4
+el tag estable más reciente es otro, **hay que re-ejecutar el cruce de los tres consumidores contra
+ese tag**: el resultado "cero roturas" está atado a `3.23.36`, no a la línea 3.23 en general.
+
+El plazo sigue siendo **un evento, no una fecha**: la publicación de Saleor 3.24.0 (ver la sección
+anterior).
+
+---
+
+## Cómo hacer una actualización
+
+### Cómo se detecta que el fork va por detrás
+
+La medida que responde "¿va el fork por detrás de upstream?" es
+`scripts/distancia-upstream/distancia.py`, y **no vive en este fork**: está con sus tests y su README
+en el repo raíz privado `aclicona/licona-ecommerce`. Dos razones: un solo dueño del guion (dos copias
+derivan en silencio) y que **este repo es público**, así que ejecutarlo aquí exigiría guardar un PAT
+del repo privado como secreto en un repo público. Corre desde el 2026-09-25 (B-517) vía
+`.github/workflows/distancia-upstream.yml` **del repo raíz**: `cron: '0 9 * * 4'` (jueves 09:00 UTC)
+más ejecución manual. Contrato de salida, el mismo de los guiones de `scripts/`: **0** = al día ·
+**1** = retraso sobre el umbral (14 días por defecto) · **2** = **no se pudo medir**, que no es
+"está atrasado".
+
+⚠️ **Precondición: los tags de upstream.** `distancia.py` mide la versión del fork con `git describe`
+sobre el clon que le pasen y **no hace fetch** — por eso el workflow del repo raíz trae
+`refs/tags/3.22.*` de `upstream` a propósito. Contra un clon sin esos tags **miente**: en el checkout
+local (14 commits por detrás de `origin/stable/3.22`) reporta 25 días de retraso cuando el real es 0.
+
+Estado hoy: **0 días de retraso**, sincronizado a `3.22.71` el 2026-09-25 (B-516). **Ninguna corrida
+programada ha ocurrido todavía**: los tres runs existentes son manuales y la primera por cron es el
+jueves 2026-10-01. El sync semanal de abajo no sustituye esta medida: 5 corridas con éxito seguidas,
+pero sus PR estuvieron 3-4 semanas sin atender y se cerraron sin mergear — detector sin actuador
+(B-566).
+
+### Requisito de una sola vez, en cada clone nuevo
+
+```sh
+git config merge.ours.driver true
+```
+
+Sin esto, el `merge=ours` que `.gitattributes` declara para `AGENTS.md` **no hace nada**
+y el archivo conflictúa en cada sync. El driver `ours` no viene definido en git y la
+config no se versiona. `sync-upstream.yml` lo ejecuta solo; los clones locales no.
+
+### Parche dentro de la minor actual (3.22.x → 3.22.y)
+
+1. `sync-upstream.yml` abre el PR cada lunes 9:00 UTC. Si viene con conflictos llega
+   como **draft** y con el título `⚠️ CON CONFLICTOS`; los marcadores están commiteados
+   a propósito, para que el PR sea revisable.
+2. Resolver sobre la rama del PR: `uv.lock` regenerándolo, el resto a mano.
+3. Revisar la sección "Cambios aplicados" de este archivo: es la lista de sitios donde
+   nuestro código y el de upstream pueden pisarse.
+4. Migraciones **contra una copia de la BD**, no solo la suite.
+5. `npm run codegen` en el storefront: si el esquema GraphQL cambió, TypeScript lo dice.
+6. Sacar el PR de draft y mergear a `stable/3.22`.
+7. Anotar la versión nueva en el historial de abajo.
+
+### Salto de minor (3.22 → 3.23)
+
+> **Autorizado el 2026-09-26 (reporte B-584).** El alcance exacto de esa autorización —y lo que
+> **no** cubre, en particular el despliegue— está en "Decisión: el salto 3.22 → 3.23 está
+> autorizado" más arriba. Leerlo antes de empezar.
+
+**Primero hay que estar al día dentro de la minor actual.** No se salta desde un punto
+atrasado: se resuelve el sync de parches, se verifica, y recién ahí se sube de minor.
+
+Dos estrategias, y la divergencia medida arriba decide cuál:
+
+**A · Re-fork limpio (recomendada mientras la divergencia siga siendo de ~20 líneas)**
+
+1. Rama `stable/3.23` desde el tag `3.23.x` estable más reciente.
+2. Reaplicar los cambios de la sección "Cambios aplicados" — son pocos y están listados.
+3. Copiar los archivos que upstream no tiene (`railway.json`, `scripts/`, workflows,
+   este archivo).
+4. Migraciones contra copia de la BD + `npm run codegen` en el storefront.
+
+Ventaja: el árbol queda idéntico a upstream salvo lo nuestro, sin arrastrar historia de
+merges. Desventaja: reaplicar a mano, y hay que acordarse de todo — por eso la sección
+"Cambios aplicados" es obligatoria de mantener.
+
+**B · Merge del tag de la minor nueva**
+
+`git merge refs/tags/3.23.x` sobre `stable/3.22`. Preserva la historia y git hace el
+grueso del trabajo, pero arrastra un merge grande. Preferible **si algún día la
+divergencia crece** y reaplicar a mano deja de ser realista.
+
+**Cierre del salto, con cualquiera de las dos:**
+
+1. Actualizar `version` en `pyproject.toml`.
+2. Apuntar `sync-upstream.yml` a `stable/3.23` (los `ref:` de los checkouts y el
+   `--base` del PR). `ci-fork.yml` no hay que tocarlo: dispara sobre `stable/*`.
+   (Aquí figuraba también `build-image.yml`; se retiró del árbol el 2026-09-03.)
+3. ⚠️ **Cambiar la rama por defecto del repo a `stable/3.23`.**
+   ```sh
+   gh repo edit aclicona/licona-saleor --default-branch stable/3.23
+   ```
+   **No es cosmético.** `schedule` de GitHub Actions solo dispara desde la rama por
+   defecto: si se olvida, el sync deja de correr **sin ningún aviso**. Es exactamente lo
+   que pasó entre abril y agosto de 2026 — cuatro meses sin sincronizar, descubiertos
+   por casualidad.
+4. Cerrar el issue de `upstream-minor` correspondiente.

@@ -10,6 +10,7 @@ import gc
 import os
 
 from django.conf import settings
+from dotenv import load_dotenv
 
 from ..core.telemetry import initialize_telemetry
 from .asgi_handler import get_asgi_application
@@ -33,6 +34,8 @@ def preload_app() -> None:
     gc.collect()
     gc.freeze()  # mark anything that remains as uncollectable to speed up future collections
 
+
+load_dotenv()
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "saleor.settings")
 

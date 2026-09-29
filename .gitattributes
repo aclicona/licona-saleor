@@ -22,3 +22,33 @@ CHANGELOG.md merge=union
 
 # Make sure that the schema uses LF line endings
 saleor/graphql/schema.graphql text=auto
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FORK licona-saleor — todo lo de abajo es nuestro, no de upstream.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# AGENTS.md: reemplazamos el de upstream por completo, así que conflictúa en
+# TODOS los syncs sin que nunca queramos nada del lado de upstream. `merge=ours`
+# lo resuelve solo, quedándose siempre con nuestra versión.
+#
+# ⚠️ ESTA LÍNEA SOLA NO HACE NADA. El driver `ours` no viene definido en git;
+# hay que declararlo, y la config de git NO se versiona:
+#
+#     git config merge.ours.driver true
+#
+# `sync-upstream.yml` lo ejecuta antes de mergear. En un clone nuevo hay que
+# correrlo a mano una vez, o el conflicto de AGENTS.md vuelve.
+# Verificado empíricamente el 2026-08-22: sin esa config, `merge=ours` deja los
+# marcadores de conflicto igual que si el atributo no existiera.
+AGENTS.md merge=ours
+
+# uv.lock NO lleva merge=ours a propósito. Ya está cubierto arriba por
+# `*.lock ... -merge` de upstream, que lo hace conflictuar siempre — y eso es lo
+# correcto: quedarse con nuestro lock dejaría el lockfile desalineado de las
+# dependencias nuevas que trae upstream en pyproject.toml. El conflicto es la
+# señal de que hay que REGENERARLO, no resolverlo a mano:
+#
+#     uv tool run uv@0.8.14 lock
+#
+# (con la versión fija del proyecto, no la del PATH — ver el gotcha en
+#  memory/saleor-api/README.md)
