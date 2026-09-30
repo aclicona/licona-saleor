@@ -56,8 +56,24 @@ la **BD real** (no en el archivo) que los constraints objetivo ya se soltaron an
 `python-dotenv`: **+2 líneas** (`uv tool run uv@0.12.1 lock`, la versión que pinea el `Dockerfile`).
 `uv lock --check` con esa versión: verde.
 
-**Tag de archivo:** `archive/stable-3.22-fork` (anotado, local, sin empujar) apunta a
+**Tag de archivo:** `archive/stable-3.22-fork` (anotado, publicado en `origin` el 2026-09-29) apunta a
 `origin/stable/3.22` (`21ee0a61c4`), el último estado del fork en 3.22.
+
+**Publicación (2026-09-30, turno `20260930-031348`):** `stable/3.23` se empujó a `origin` en
+`bcabfad312`. Crear la rama **no despliega**: Railway sigue apuntando a `stable/3.22`. El push exige
+que el token de `gh` tenga el scope `workflow` (todo re-fork toca `.github/workflows/`) y que git use
+ese token (`gh auth setup-git`), no uno viejo del llavero.
+
+**Cambio nuevo del fork, nacido del primer CI sobre la rama — `pyproject.toml`, `[tool.ruff]`
+`extend-exclude = [ ".semgrep" ]` (+4 líneas con su comentario).** El primer run de `ci-fork.yml`
+sobre `stable/3.23` (`36688509531`) salió rojo en `Puerta rapida` → `Ruff`: 76 errores, **todos** en
+cuatro fixtures de `.semgrep/` que existen idénticos en 3.22. La causa no es el payload: upstream 3.23
+añadió `!.semgrep/` a `.gitignore`, y ruff respeta `.gitignore`; en 3.22 la regla `.*` escondía el
+directorio y en 3.23 deja de hacerlo. Se reproduce en `3.23.36` puro con `ruff check .`. Se excluye en
+`pyproject.toml` y no con `--exclude` en el workflow porque el job `Linters (pre-commit)` pasa los
+archivos por ruta y solo la config del proyecto (`--force-exclude`) los filtra ahí, y porque así el
+`ruff check .` local y el del CI dicen lo mismo. **Conflicto potencial al actualizar upstream:** bajo
+(upstream no tiene `extend-exclude` en `[tool.ruff]`); si algún día lo añade, fusionar las dos listas.
 
 **Verificación local (2026-09-29, venv desechable con las deps de 3.23.36, Postgres 16 desechable):**
 

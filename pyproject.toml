@@ -242,6 +242,10 @@ warn_required_dynamic_aliases = true
 
 [tool.ruff]
 target-version = "py312"
+# Cambio del fork: `.semgrep/` son fixtures de reglas de semgrep (codigo malo a proposito).
+# Upstream 3.23 los saco del `.gitignore` (`!.semgrep/`) y desde entonces `ruff check .` los
+# lintea y falla; upstream no lo nota porque no corre ruff sobre todo el arbol. Ver UPGRADE_NOTES.md.
+extend-exclude = [ ".semgrep" ]
 
   [tool.ruff.lint]
   select = [
