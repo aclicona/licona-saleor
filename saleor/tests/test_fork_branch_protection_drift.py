@@ -34,7 +34,7 @@ tiene una suite de tests propia, y `setup.cfg` fija `testpaths = saleor`, así
 que un archivo fuera de `saleor/` no lo recogería ni un `pytest` corrido sin
 argumentos ni el job `suite` de `ci-fork.yml`. Este archivo es nuevo, con
 nombre propio (`test_fork_*`), así que no compite por líneas con upstream en
-ningún sync de la rama `stable/3.22.x`.
+ningún sync de la rama `stable/3.23.x`.
 
 No usa la base de datos: solo lee dos archivos de texto del repo. No requiere
 la fixture `db` ni `@pytest.mark.django_db`.

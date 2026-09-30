@@ -95,7 +95,7 @@
 # Por defecto verifica la rama de despliegue de ESTE fork. Para verificar la
 # réplica de un cliente, sin editar el guion:
 #
-#   REPO=cliente/su-saleor RAMA=stable/3.22 sh scripts/check-branch-protection.sh
+#   REPO=cliente/su-saleor RAMA=stable/3.23 sh scripts/check-branch-protection.sh
 #
 # Motivo: al replicar el repo para un cliente, la branch protection NO viaja
 # (ver "Por qué existe" arriba) — con este guion la réplica puede AFIRMAR que
@@ -125,7 +125,7 @@ if [ -n "${RAMA+definida}" ] && [ -z "$RAMA" ]; then
 fi
 
 REPO="${REPO:-aclicona/licona-saleor}"
-RAMA="${RAMA:-stable/3.22}"
+RAMA="${RAMA:-stable/3.23}"
 
 # El contexto esperado en `required_status_checks.contexts`. Esta cadena está
 # ACOPLADA al `name:` del job `puerta` en `.github/workflows/ci-fork.yml`

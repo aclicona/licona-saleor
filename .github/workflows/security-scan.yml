@@ -2,7 +2,7 @@ name: Security scan (Trivy)
 
 on:
   push:
-    branches: [stable/3.22]
+    branches: [stable/3.23]
   schedule:
     - cron: '0 6 * * 1'
 

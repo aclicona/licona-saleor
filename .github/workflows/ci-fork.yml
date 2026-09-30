@@ -29,7 +29,7 @@ permissions:
 
 on:
   # `push` sobre `stable/*` existe porque la via de despliegue real de este fork es
-  # push DIRECTO a `stable/3.22`, sin PR de por medio. Mientras todo disparara solo
+  # push DIRECTO a `stable/3.23`, sin PR de por medio. Mientras todo disparara solo
   # en `pull_request`, la CI no vigilaba NADA en el unico camino que se usa: un
   # `schema.graphql` desincronizado del codigo llegaba a Railway sin que nadie mirara.
   #

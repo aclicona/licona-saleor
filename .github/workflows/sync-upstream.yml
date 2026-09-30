@@ -84,7 +84,7 @@ jobs:
           # Explícito a propósito: sin `ref`, el checkout toma la rama por defecto.
           # Eso funciona hoy, pero ata el workflow a una configuración del repo que
           # ya falló una vez. Fijarla aquí hace el workflow correcto por sí mismo.
-          ref: stable/3.22
+          ref: stable/3.23
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -517,7 +517,7 @@ jobs:
           } > /tmp/pr-body.md
 
           # Draft en los dos casos en que el árbol no está sano:
-          #   - conflictos: impide que un merge accidental meta marcadores en `stable/3.22`.
+          #   - conflictos: impide que un merge accidental meta marcadores en `stable/3.23`.
           #   - puerta en rojo: el sync no pasa ni lo mínimo; que no parezca mergeable.
           DRAFT=""
           TITLE="chore: sync upstream Saleor $TAG"
@@ -542,7 +542,7 @@ jobs:
           gh pr create \
             --title "$TITLE" \
             --body-file /tmp/pr-body.md \
-            --base stable/3.22 \
+            --base stable/3.23 \
             --head "$BRANCH" \
             --label "upstream-sync" \
             $DRAFT
@@ -561,7 +561,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: stable/3.22
+          ref: stable/3.23
           fetch-depth: 0
 
       - name: Fetch upstream tags

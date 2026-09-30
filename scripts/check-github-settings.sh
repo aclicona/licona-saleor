@@ -199,7 +199,7 @@
 # Por defecto verifica ESTE fork. Para verificar la réplica de un cliente, sin
 # editar el guion:
 #
-#   REPO=cliente/su-saleor RAMA=stable/3.22 sh scripts/check-github-settings.sh
+#   REPO=cliente/su-saleor RAMA=stable/3.23 sh scripts/check-github-settings.sh
 #
 # La RAMA se usa para el cruce contra el árbol (`contents/.github/workflows`):
 # la lista de la API de Actions no dice en qué rama vive cada archivo, así que
@@ -229,7 +229,7 @@ if [ -n "${RAMA+definida}" ] && [ -z "$RAMA" ]; then
 fi
 
 REPO="${REPO:-aclicona/licona-saleor}"
-RAMA="${RAMA:-stable/3.22}"
+RAMA="${RAMA:-stable/3.23}"
 
 # Los tres workflows PROPIOS del fork (no existen en upstream). Esta lista está
 # ACOPLADA a los archivos reales de `.github/workflows/`: si alguien borra o
