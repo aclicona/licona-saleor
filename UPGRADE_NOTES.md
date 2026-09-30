@@ -95,6 +95,36 @@ El tag puro recoge 17 855 tests; los 7 restantes son los dos tests de deriva del
 cambiar la rama por defecto del repo y cerrar el issue `upstream-minor`. Los textos de este archivo que
 dicen `3.22` describen la línea anterior y se actualizan en B-523.
 
+### Sincronización a 3.23.37 (2026-09-30, turno `20260930-060258`, B-665)
+
+**Qué trajo upstream (`3.23.36..3.23.37`, 4 commits):** `setPassword` y `confirmAccount` emiten ahora
+`ACCOUNT_CONFIRMED` + `CUSTOMER_UPDATED`/`STAFF_UPDATED` al confirmar una cuenta (#19834); la tarea de
+backfill del `search_vector` de usuarios gana cursor (#19841); CI de upstream: filtros de ruta sustituidos
+por un chequeo en el job (#19787, toca `tests-and-linters.yml`, `e2e.yml` y una action nueva
+`detect-python-changes`); bump de versión. **Sin migraciones nuevas** (`git diff --stat 3.23.36 3.23.37 -- '*/migrations/*'` vacío).
+`Dockerfile` sin cambios. **`schema.graphql` cambia** (+18/−4: solo docstrings y `@webhookEventsInfo` de
+`confirmAccount`/`setPassword`; ningún tipo, campo ni argumento nuevo o retirado).
+
+**Conflictos:** uno, `uv.lock` (upstream sube la versión del paquete `saleor` 3.23.36 → 3.23.37; el fork
+lleva +2 líneas de `python-dotenv`). Resolución: se conserva el lock del fork con la versión subida a mano;
+`git diff 3.23.37 -- uv.lock` queda en exactamente las 2 líneas del payload. Los workflows de upstream
+(`tests-and-linters.yml`, `e2e.yml`) se fusionaron sin conflicto. Merge (no rebase), historia intacta.
+
+**Referencias re-apuntadas a `stable/3.23`:** `sync-upstream.yml` (2 × `ref:` y `--base`, más un comentario),
+`security-scan.yml` (`branches:`), `check-branch-protection.sh` y `check-github-settings.sh` (`RAMA` por
+defecto y ejemplo del comentario), comentario de `ci-fork.yml` sobre la vía de despliegue y docstring de
+`test_fork_branch_protection_drift.py`. Se dejan a propósito (históricos o ilustrativos): `ci-fork.yml:5`,
+`sync-upstream.yml:4` (la rama por defecto de GitHub sigue siendo `stable/3.22` hasta el cierre del salto),
+y los ejemplos de `check-*.sh` que citan `stable/3.22` como caso de rama con `/`.
+
+**Verificación local (venv desechable con `uv sync --frozen`, Postgres 16 y Redis desechables):**
+`manage.py check` 0 issues; `makemigrations --check --dry-run` sin cambios; `check-schema-fidelity.sh` exit 0;
+`migrate` sobre BD vacía completo (~35 s), `check-migrations.sh` exit 0 después; `ruff check .` limpio y
+`ruff format --check .` limpio; `saleor/tests/test_fork_*` 7 passed; `pytest -m "not e2e" -n 12`:
+17 864 passed, 1 skipped, 3 failed: los 2 de `test_http_client_disallows_private_ip_ranges` (red saliente
+del entorno, ya conocidos) y `order/tests/test_notifications.py::test_get_default_fulfillment_payload`,
+que no toca nada del delta y pasa aislado y con su archivo completo (flake bajo xdist).
+
 ---
 
 ## Cambios aplicados
