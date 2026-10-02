@@ -1282,3 +1282,21 @@ divergencia crece** y reaplicar a mano deja de ser realista.
    que pasó entre abril y agosto de 2026 — cuatro meses sin sincronizar, descubiertos
    por casualidad.
 4. Cerrar el issue de `upstream-minor` correspondiente.
+
+### 2026-10-02 — `CELERY_BEAT_SCHEDULER` por defecto en settings (base: 3.23.37, B-700)
+
+**Desviación del upstream.** `saleor/settings.py` define
+`CELERY_BEAT_SCHEDULER = os.environ.get("CELERY_BEAT_SCHEDULER", "saleor.schedulers.schedulers.PersistentScheduler")`.
+
+- **Por qué:** upstream exige arrancar beat con `--scheduler saleor.schedulers.schedulers.PersistentScheduler`
+  (o `DatabaseScheduler`). Nuestro `startCommand` de Railway (`celery -A saleor beat`) nunca lo pasó, así que
+  beat usaba el `PersistentScheduler` de Celery, cuyo `tick()` solo mira la cabeza del heap: la planificación
+  condicional `promotion_webhook_schedule` (`is_due=False`, siguiente=60 s cuando no hay nada pendiente) se
+  quedaba en la cabeza y bloqueaba `recalculate-promotion-rules`, `recalculate-discounted-price-for-products`, etc.
+  Tras 1-2 envíos beat pasaba a `Waking up in 59.99 s` y callaba.
+- **Por qué en settings y no en el comando:** no depende del `startCommand` de Railway; `celery beat` lo toma de
+  `app.conf.beat_scheduler` cuando no se pasa `-S`/`--scheduler`.
+- **Cómo revertir:** variable de entorno `CELERY_BEAT_SCHEDULER=celery.beat.PersistentScheduler` (o borrar la
+  línea de settings). Un `--scheduler` explícito en el comando sigue mandando.
+- **Test:** `saleor/schedulers/tests/test_beat_scheduler_setting.py`.
+- **Al sincronizar con upstream:** si upstream ya fija el scheduler por defecto, retirar esta desviación.

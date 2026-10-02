@@ -638,6 +638,14 @@ CELERY_BROKER_URL = (
 if CELERY_BROKER_URL.startswith("sqs://"):
     CELERY_BROKER_TRANSPORT = "saleor.core.sqs.Transport"
 
+# B-700: `celery beat` without `--scheduler` uses Celery's stock PersistentScheduler,
+# whose tick() only inspects the head of the heap. Saleor's conditional schedules
+# (e.g. `promotion_webhook_schedule`, is_due=False/next=60s when idle) stay at the
+# head and starve every other periodic task. Saleor's own scheduler fixes tick();
+# setting it here avoids depending on the `--scheduler` flag of the start command.
+CELERY_BEAT_SCHEDULER = os.environ.get(
+    "CELERY_BEAT_SCHEDULER", "saleor.schedulers.schedulers.PersistentScheduler"
+)
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", None)
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TASK_ALWAYS_EAGER = not CELERY_BROKER_URL
