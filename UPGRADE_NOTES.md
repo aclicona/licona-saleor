@@ -1300,3 +1300,29 @@ divergencia crece** y reaplicar a mano deja de ser realista.
   línea de settings). Un `--scheduler` explícito en el comando sigue mandando.
 - **Test:** `saleor/schedulers/tests/test_beat_scheduler_setting.py`.
 - **Al sincronizar con upstream:** si upstream ya fija el scheduler por defecto, retirar esta desviación.
+
+### 2026-10-03 — `check-branch-protection.sh` amplía su contrato de 5 a 11 puntos (base: 3.23.37, B-553)
+
+El guion afirmaba solo cinco campos y salía en verde con la protección real bloqueando el
+despliegue (`lock_branch`, `restrictions`, `required_pull_request_reviews`...: falso verde).
+
+- **Ahora verifica once puntos:** los cinco de antes más `lock_branch.enabled == false`,
+  `block_creations.enabled == false`, `required_linear_history.enabled == false`,
+  `required_signatures.enabled == false`, y la **ausencia** de `required_pull_request_reviews` y de
+  `restrictions` (la API omite la clave cuando no están configuradas; su presencia es deriva, y de
+  `restrictions` no se validan las listas de actores: se afirma «sin restricciones»).
+- **Por qué linear_history y signatures:** medido sobre `origin/stable/3.23`, la historia tiene
+  merge commits propios del fork (`chore(3.23): merge del tag upstream`) y ningún commit firmado.
+  Con cualquiera de los dos en `true` el siguiente sync o push del worker se rechaza.
+- **Fuera del contrato, por escrito en la cabecera del guion:** `allow_fork_syncing`,
+  `required_conversation_resolution` (solo PRs) y `url`. Tampoco se consultan los repository
+  rulesets (API distinta).
+- **Se conserva el endurecimiento:** 404 sin admin con `.protected=true` sigue siendo exit 2;
+  salida vacía, truncada o `{}` (ninguno de los campos obligatorios) es exit 2, no derivas
+  fabricadas. La ausencia de `restrictions`/`required_pull_request_reviews` es estado legítimo;
+  la de los obligatorios no.
+- El `PUT` de remedio incluye ahora `required_linear_history`, `block_creations` y `lock_branch`;
+  `required_signatures` no cabe en el PUT, y el guion indica el `DELETE .../required_signatures`.
+- `saleor/tests/test_fork_branch_protection_drift.py` gana una matriz (`gh` falso + `jq`, se salta
+  si no hay `jq`): conforme→0; cada campo del contrato roto→1; cuerpo vacío o `{}`→2; 404 con
+  rama protegida→2, sin proteger→1.

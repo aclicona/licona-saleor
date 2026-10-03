@@ -40,9 +40,14 @@ No usa la base de datos: solo lee dos archivos de texto del repo. No requiere
 la fixture `db` ni `@pytest.mark.django_db`.
 """
 
+import json
+import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 # El archivo vive en <raíz>/saleor/tests/, así que la raíz del repo está dos
@@ -136,3 +141,103 @@ def test_guion_y_job_existen():
     assert "name" in jobs["puerta"], (
         f"El job `puerta` en {WORKFLOW} existe pero no tiene `name:`."
     )
+
+
+# ─── Contrato de los campos: el guion contra un `gh` falso ─────────────────────
+# El guion ahora afirma once puntos (ver su cabecera). Estos casos lo ejecutan
+# con un `gh` falso en el PATH que sirve un JSON de /protection y le aplica el
+# `--jq` real con `jq`, para fijar que cada campo que puede bloquear el push de
+# despliegue produce exit 1, que la ausencia de `restrictions` y
+# `required_pull_request_reviews` es el estado conforme, y que una respuesta
+# vacía o `{}` es "no sé" (2) y no una cascada de derivas. Sin red.
+
+_GH_FALSO = """#!/bin/sh
+[ "$1" = auth ] && exit 0
+EP=$2; shift 2
+JQ=""; while [ $# -gt 0 ]; do [ "$1" = "--jq" ] && JQ=$2; shift; done
+case "$EP" in
+  */protection)
+    [ "$CASO" = 404 ] && { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+    [ -f "$FIX/protection.json" ] || exit 0
+    jq -r "$JQ" "$FIX/protection.json" ;;
+  *) echo "stable/3.23"; echo "${PROTECTED:-true}" ;;
+esac
+"""
+
+_PROTECCION_CONFORME = {
+    "required_status_checks": {"strict": False, "contexts": ["Puerta rapida"]},
+    "enforce_admins": {"enabled": False},
+    "allow_force_pushes": {"enabled": True},
+    "allow_deletions": {"enabled": False},
+    "block_creations": {"enabled": False},
+    "lock_branch": {"enabled": False},
+    "required_linear_history": {"enabled": False},
+    "required_signatures": {"enabled": False},
+    "required_conversation_resolution": {"enabled": False},
+    "allow_fork_syncing": {"enabled": False},
+    "url": "https://example.invalid",
+}
+
+
+def _ejecutar_guion(tmp_path, cuerpo, caso="", protegida="true"):
+    if shutil.which("jq") is None or shutil.which("sh") is None:
+        pytest.skip("hace falta `jq` y `sh` para simular el `--jq` de gh")
+    gh = tmp_path / "bin" / "gh"
+    gh.parent.mkdir()
+    gh.write_text(_GH_FALSO, encoding="utf-8")
+    gh.chmod(0o755)
+    if cuerpo is not None:
+        (tmp_path / "protection.json").write_text(cuerpo, encoding="utf-8")
+    entorno = {
+        **os.environ,
+        "PATH": f"{gh.parent}{os.pathsep}{os.environ['PATH']}",
+        "FIX": str(tmp_path),
+        "CASO": caso,
+        "PROTECTED": protegida,
+    }
+    return subprocess.run(
+        ["sh", str(GUION)], env=entorno, capture_output=True, text=True, check=False
+    ).returncode
+
+
+def _con(**cambios):
+    return json.dumps({**_PROTECCION_CONFORME, **cambios})
+
+
+@pytest.mark.parametrize(
+    ("cuerpo", "esperado"),
+    [
+        (json.dumps(_PROTECCION_CONFORME), 0),
+        (_con(lock_branch={"enabled": True}), 1),
+        (_con(block_creations={"enabled": True}), 1),
+        (_con(required_linear_history={"enabled": True}), 1),
+        (_con(required_signatures={"enabled": True}), 1),
+        (_con(restrictions={"users": [], "teams": [], "apps": []}), 1),
+        (_con(required_pull_request_reviews={"required_approving_review_count": 1}), 1),
+        (_con(enforce_admins={"enabled": True}), 1),
+        ("", 2),
+        ("{}", 2),
+    ],
+    ids=[
+        "conforme",
+        "lock_branch",
+        "block_creations",
+        "linear_history",
+        "signatures",
+        "restrictions",
+        "pr_reviews",
+        "enforce_admins",
+        "cuerpo_vacio",
+        "objeto_vacio",
+    ],
+)
+def test_guion_exit_code_segun_la_proteccion(tmp_path, cuerpo, esperado):
+    assert _ejecutar_guion(tmp_path, cuerpo) == esperado
+
+
+def test_guion_404_con_rama_protegida_es_no_se(tmp_path):
+    assert _ejecutar_guion(tmp_path, None, caso="404", protegida="true") == 2
+
+
+def test_guion_404_con_rama_sin_proteger_es_deriva(tmp_path):
+    assert _ejecutar_guion(tmp_path, None, caso="404", protegida="false") == 1

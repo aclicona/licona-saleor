@@ -43,18 +43,44 @@
 #       workflow no lee branch protection sin `permissions: administration:
 #       read`.
 #
-# ─── Alcance: qué NO verifica ────────────────────────────────────────────────
-# Verifica CINCO campos —`required_status_checks.contexts`,
-# `required_status_checks.strict`, `enforce_admins.enabled`,
-# `allow_force_pushes.enabled` y `allow_deletions.enabled`— y nada más. La API
-# devuelve bastantes más (`lock_branch`, `restrictions`,
-# `required_pull_request_reviews`, `required_conversation_resolution`...).
-# Un exit 0 significa "esos cinco coinciden", NO "la protección entera está
-# bien": un repo con `lock_branch: true`, o con `restrictions` que excluya al
-# desplegador, sale en verde aquí con el push de despliegue bloqueado. El
-# mensaje final lo dice en voz alta a propósito, para que el verde no se lea
-# como una garantía que no da. Ampliar la cobertura al resto de campos es
-# trabajo aparte.
+# ─── Alcance: qué verifica y qué NO ──────────────────────────────────────────
+# El contrato cubre TODO campo de la protección que puede bloquear (o abrir de
+# más) el push directo de despliegue a la rama —la vía real de este fork: push
+# directo sin PR—. Son once comprobaciones:
+#   required_status_checks.contexts      == ["Puerta rapida"]
+#   required_status_checks.strict        == false
+#   enforce_admins.enabled               == false
+#   allow_force_pushes.enabled           == true
+#   allow_deletions.enabled              == false
+#   lock_branch.enabled                  == false  (true = rama de solo lectura)
+#   block_creations.enabled              == false
+#   required_linear_history.enabled      == false
+#   required_signatures.enabled          == false
+#   required_pull_request_reviews        AUSENTE   (si existe, exige PR)
+#   restrictions                         AUSENTE   (si existe, limita quién empuja)
+#
+# Por qué entran linear_history y signatures (medido el 2026-10-03 sobre
+# origin/stable/3.23): la historia de la rama CONTIENE merge commits propios del
+# fork (p. ej. `chore(3.23): merge del tag upstream`, df2d84f) y NINGÚN commit
+# lleva firma verificada (`git log --format=%G?` da N en todos). Con
+# required_linear_history o required_signatures en true, el siguiente merge de
+# tag upstream o el push de un commit del worker queda rechazado.
+#
+# `required_pull_request_reviews` y `restrictions`: la API OMITE la clave
+# cuando no están configuradas. Su ausencia es el estado legítimo (por eso no
+# cuentan como "respuesta truncada"); su presencia es deriva. De `restrictions`
+# NO se validan las listas de actores (users/teams/apps): se afirma "sin
+# restricciones" en vez de intentar decidir si el desplegador está en la lista.
+#
+# FUERA del contrato, a propósito:
+#   · allow_fork_syncing — solo afecta a la sincronización de forks que cuelgan
+#     de este repo; no toca el push de despliegue.
+#   · required_conversation_resolution — solo aplica a pull requests, y esta
+#     rama no se despliega por PR.
+#   · url — metadato de la API, no es configuración.
+# Tampoco se miran los repository RULESETS (otra API): una regla ahí también
+# podría bloquear el push. Un exit 0 significa "estos once puntos coinciden",
+# NO "no existe ningún otro mecanismo que bloquee el despliegue".
 #
 # ─── Por qué existe ──────────────────────────────────────────────────────────
 # La branch protection de GitHub NO viaja con el código: vive solo en la
@@ -151,13 +177,16 @@ consejo_arreglar() {
   echo "$ETIQUETA Para restaurar el contrato (esto el guion NO lo ejecuta, es solo el comando)."
   echo "$ETIQUETA AVISO antes de pegarlo: 'PUT /protection' REEMPLAZA el objeto entero, no"
   echo "$ETIQUETA fusiona campos. Borraría en silencio cualquier ajuste que este repo tuviera"
-  echo "$ETIQUETA puesto a propósito y que no aparezca abajo (restrictions,"
-  echo "$ETIQUETA required_pull_request_reviews, lock_branch...). Mira qué hay antes de escribir."
+  echo "$ETIQUETA puesto a propósito y que no aparezca abajo (required_conversation_resolution,"
+  echo "$ETIQUETA allow_fork_syncing...). Mira qué hay antes de escribir. Ojo: el PUT no puede"
+  echo "$ETIQUETA expresar required_signatures: si esa deriva aparece, se quita con"
+  echo "$ETIQUETA 'gh api -X DELETE repos/$REPO/branches/$RAMA_ESC/protection/required_signatures'."
   echo ""
   echo "gh api -X PUT repos/$REPO/branches/$RAMA_ESC/protection --input - <<'JSON'"
   echo "{\"required_status_checks\":{\"strict\":false,\"contexts\":[\"$CONTEXTO_ESPERADO\"]},"
   echo " \"enforce_admins\":false,\"required_pull_request_reviews\":null,\"restrictions\":null,"
-  echo " \"allow_force_pushes\":true,\"allow_deletions\":false}"
+  echo " \"required_linear_history\":false,\"allow_force_pushes\":true,\"allow_deletions\":false,"
+  echo " \"block_creations\":false,\"lock_branch\":false}"
   echo "JSON"
   echo ""
 }
@@ -249,7 +278,7 @@ if [ "$PROTEGIDA" != "true" ] && [ "$PROTEGIDA" != "false" ]; then
   exit 2
 fi
 
-# ─── 2. La protección — una sola llamada, cinco campos ──────────────────────
+# ─── 2. La protección — una sola llamada, once campos ──────────────────────
 # Se usa el --jq EMBEBIDO de 'gh' (no un 'jq' externo instalado aparte: 'gh'
 # ya lo trae vendorizado, así que no hace falta declarar esa dependencia).
 #
@@ -265,7 +294,13 @@ gh api "repos/$REPO/branches/$RAMA_ESC/protection" \
           (.required_status_checks.strict | tostring),
           (.enforce_admins.enabled | tostring),
           (.allow_force_pushes.enabled | tostring),
-          (.allow_deletions.enabled | tostring) ] | .[]' \
+          (.allow_deletions.enabled | tostring),
+          (.lock_branch.enabled | tostring),
+          (.block_creations.enabled | tostring),
+          (.required_linear_history.enabled | tostring),
+          (.required_signatures.enabled | tostring),
+          (if .required_pull_request_reviews != null then "presente" else "ausente" end),
+          (if .restrictions != null then "presente" else "ausente" end) ] | .[]' \
   >"$TMP/prot.out" 2>"$TMP/prot.err"
 CODIGO_PROT=$?
 
@@ -331,9 +366,9 @@ fi
 # tres primeros campos y reportaba deriva en los dos que faltaban.
 # La regla es la de siempre: si no pude leer la respuesta, es 2, nunca 1.
 LINEAS_PROT=$(awk 'END {print NR+0}' "$TMP/prot.out")
-if [ "$LINEAS_PROT" -ne 5 ]; then
+if [ "$LINEAS_PROT" -ne 11 ]; then
   echo "$ETIQUETA NO SE PUDO RESPONDER: 'gh api' salió con código 0 pero su respuesta no tiene"
-  echo "$ETIQUETA la forma esperada: esperaba 5 líneas (una por campo), obtuve $LINEAS_PROT."
+  echo "$ETIQUETA la forma esperada: esperaba 11 líneas (una por campo), obtuve $LINEAS_PROT."
   REVELADORA=$(tail -n 1 "$TMP/prot.err")
   echo "$ETIQUETA Línea reveladora: ${REVELADORA:-(sin mensaje en stderr)}"
   echo "$ETIQUETA Esto NO dice que la protección esté mal: dice que no pude leerla. No apliques"
@@ -346,6 +381,12 @@ STRICT=$(sed -n '2p' "$TMP/prot.out")
 ENFORCE_ADMINS=$(sed -n '3p' "$TMP/prot.out")
 ALLOW_FORCE_PUSHES=$(sed -n '4p' "$TMP/prot.out")
 ALLOW_DELETIONS=$(sed -n '5p' "$TMP/prot.out")
+LOCK_BRANCH=$(sed -n '6p' "$TMP/prot.out")
+BLOCK_CREATIONS=$(sed -n '7p' "$TMP/prot.out")
+LINEAR_HISTORY=$(sed -n '8p' "$TMP/prot.out")
+SIGNATURES=$(sed -n '9p' "$TMP/prot.out")
+PR_REVIEWS=$(sed -n '10p' "$TMP/prot.out")
+RESTRICCIONES=$(sed -n '11p' "$TMP/prot.out")
 
 # Los cuatro booleanos NUNCA pueden salir vacíos de un JSON bien formado:
 # `tostring` siempre produce texto ('true', 'false' o el literal 'null'). Si
@@ -355,11 +396,34 @@ ALLOW_DELETIONS=$(sed -n '5p' "$TMP/prot.out")
 # (`[] | join(",")` da ""), y eso significa "ningún check gatea el merge", que
 # es una deriva REAL y se reporta más abajo como exit 1. Meterlo aquí
 # convertiría esa deriva de verdad en un "no sé".
-if [ -z "$STRICT" ] || [ -z "$ENFORCE_ADMINS" ] || [ -z "$ALLOW_FORCE_PUSHES" ] || [ -z "$ALLOW_DELETIONS" ]; then
-  echo "$ETIQUETA NO SE PUDO RESPONDER: la respuesta trajo 5 líneas pero algún campo booleano"
-  echo "$ETIQUETA vino vacío (strict='$STRICT' enforce_admins='$ENFORCE_ADMINS'"
-  echo "$ETIQUETA allow_force_pushes='$ALLOW_FORCE_PUSHES' allow_deletions='$ALLOW_DELETIONS')."
+# `PR_REVIEWS` y `RESTRICCIONES` salen de un `if` del jq: siempre son
+# "presente" o "ausente", nunca vacíos ni 'null'. Su AUSENCIA es el estado
+# legítimo (la API omite la clave), así que NO cuentan para la guarda de
+# truncado de abajo; sí se exige que sean una de las dos palabras.
+if [ -z "$STRICT" ] || [ -z "$ENFORCE_ADMINS" ] || [ -z "$ALLOW_FORCE_PUSHES" ] || [ -z "$ALLOW_DELETIONS" ] \
+  || [ -z "$LOCK_BRANCH" ] || [ -z "$BLOCK_CREATIONS" ] || [ -z "$LINEAR_HISTORY" ] || [ -z "$SIGNATURES" ] \
+  || { [ "$PR_REVIEWS" != "presente" ] && [ "$PR_REVIEWS" != "ausente" ]; } \
+  || { [ "$RESTRICCIONES" != "presente" ] && [ "$RESTRICCIONES" != "ausente" ]; }; then
+  echo "$ETIQUETA NO SE PUDO RESPONDER: la respuesta trajo 11 líneas pero algún campo vino"
+  echo "$ETIQUETA vacío o ilegible (strict='$STRICT' enforce_admins='$ENFORCE_ADMINS'"
+  echo "$ETIQUETA allow_force_pushes='$ALLOW_FORCE_PUSHES' allow_deletions='$ALLOW_DELETIONS'"
+  echo "$ETIQUETA lock_branch='$LOCK_BRANCH' block_creations='$BLOCK_CREATIONS'"
+  echo "$ETIQUETA linear_history='$LINEAR_HISTORY' signatures='$SIGNATURES'"
+  echo "$ETIQUETA pr_reviews='$PR_REVIEWS' restrictions='$RESTRICCIONES')."
   echo "$ETIQUETA Comparar contra eso inventaría derivas. No apliques ningún remedio a partir de esto."
+  exit 2
+fi
+
+# Un cuerpo `{}` (o sin NINGUNO de los campos booleanos) también es "respuesta
+# truncada", no una cascada de derivas: una protección real siempre trae al
+# menos `enforce_admins`, `allow_force_pushes` y `allow_deletions`. A diferencia
+# de `required_pull_request_reviews`/`restrictions` (cuya ausencia es legítima),
+# la ausencia de TODOS los obligatorios solo puede ser avería.
+if [ "$ENFORCE_ADMINS$ALLOW_FORCE_PUSHES$ALLOW_DELETIONS$LOCK_BRANCH$BLOCK_CREATIONS$LINEAR_HISTORY$SIGNATURES" = "nullnullnullnullnullnullnull" ]; then
+  echo "$ETIQUETA NO SE PUDO RESPONDER: la respuesta de /protection no trae NINGUNO de los campos"
+  echo "$ETIQUETA obligatorios (enforce_admins, allow_force_pushes, allow_deletions, lock_branch...)."
+  echo "$ETIQUETA Esto NO dice que la protección esté mal: dice que no pude leerla. No apliques"
+  echo "$ETIQUETA ningún remedio a partir de esto."
   exit 2
 fi
 
@@ -371,6 +435,10 @@ fi
 [ "$ENFORCE_ADMINS" = "null" ] && ENFORCE_ADMINS="(ausente)"
 [ "$ALLOW_FORCE_PUSHES" = "null" ] && ALLOW_FORCE_PUSHES="(ausente)"
 [ "$ALLOW_DELETIONS" = "null" ] && ALLOW_DELETIONS="(ausente)"
+[ "$LOCK_BRANCH" = "null" ] && LOCK_BRANCH="(ausente)"
+[ "$BLOCK_CREATIONS" = "null" ] && BLOCK_CREATIONS="(ausente)"
+[ "$LINEAR_HISTORY" = "null" ] && LINEAR_HISTORY="(ausente)"
+[ "$SIGNATURES" = "null" ] && SIGNATURES="(ausente)"
 
 # ─── 3. Comparar contra el contrato — acumular TODAS las derivas ────────────
 # No se corta en la primera diferencia: un llamador que solo se entera de un
@@ -452,26 +520,76 @@ if [ "$ALLOW_DELETIONS" != "false" ]; then
   echo "$ETIQUETA   Consecuencia: en true cualquiera con permiso de push puede borrar la rama de despliegue."
 fi
 
+if [ "$LOCK_BRANCH" != "false" ]; then
+  DERIVAS="${DERIVAS}x"
+  echo "$ETIQUETA DERIVA en lock_branch.enabled:"
+  echo "$ETIQUETA   esperado: false · encontrado: $LOCK_BRANCH"
+  echo "$ETIQUETA   Consecuencia GRAVE: en true la rama es de SOLO LECTURA — ningún push, ni"
+  echo "$ETIQUETA   el de despliegue, entra."
+fi
+
+if [ "$BLOCK_CREATIONS" != "false" ]; then
+  DERIVAS="${DERIVAS}x"
+  echo "$ETIQUETA DERIVA en block_creations.enabled:"
+  echo "$ETIQUETA   esperado: false · encontrado: $BLOCK_CREATIONS"
+  echo "$ETIQUETA   Consecuencia: en true se bloquea crear refs que casen con la protección; el"
+  echo "$ETIQUETA   push que (re)crea la rama de despliegue fallaría."
+fi
+
+if [ "$LINEAR_HISTORY" != "false" ]; then
+  DERIVAS="${DERIVAS}x"
+  echo "$ETIQUETA DERIVA en required_linear_history.enabled:"
+  echo "$ETIQUETA   esperado: false · encontrado: $LINEAR_HISTORY"
+  echo "$ETIQUETA   Consecuencia: en true se rechazan los merge commits, y el flujo de sync de"
+  echo "$ETIQUETA   este fork los usa ('chore(3.23): merge del tag upstream')."
+fi
+
+if [ "$SIGNATURES" != "false" ]; then
+  DERIVAS="${DERIVAS}x"
+  echo "$ETIQUETA DERIVA en required_signatures.enabled:"
+  echo "$ETIQUETA   esperado: false · encontrado: $SIGNATURES"
+  echo "$ETIQUETA   Consecuencia: en true se rechaza todo commit sin firma verificada; los del"
+  echo "$ETIQUETA   worker y los de sync no la llevan."
+fi
+
+if [ "$PR_REVIEWS" != "ausente" ]; then
+  DERIVAS="${DERIVAS}x"
+  echo "$ETIQUETA DERIVA en required_pull_request_reviews:"
+  echo "$ETIQUETA   esperado: ausente · encontrado: $PR_REVIEWS"
+  echo "$ETIQUETA   Consecuencia GRAVE: exige PR para entrar a '$RAMA'; el push directo de"
+  echo "$ETIQUETA   despliegue (sin PR) queda rechazado."
+fi
+
+if [ "$RESTRICCIONES" != "ausente" ]; then
+  DERIVAS="${DERIVAS}x"
+  echo "$ETIQUETA DERIVA en restrictions:"
+  echo "$ETIQUETA   esperado: ausente (sin restricciones) · encontrado: $RESTRICCIONES"
+  echo "$ETIQUETA   Consecuencia: limita QUIÉN puede empujar a '$RAMA'. No se validan las listas de"
+  echo "$ETIQUETA   actores: el contrato afirma 'sin restricciones'. Si es deliberado y el"
+  echo "$ETIQUETA   desplegador está en la lista, el contrato debe cambiarse a propósito."
+fi
+
 if [ -n "$DERIVAS" ]; then
   echo "$ETIQUETA La branch protection de '$RAMA' en '$REPO' NO coincide con lo esperado en al"
-  echo "$ETIQUETA menos uno de los cinco campos que este guion verifica."
+  echo "$ETIQUETA menos uno de los once puntos que este guion verifica."
   consejo_arreglar
   exit 1
 fi
 
-# El verde dice EXACTAMENTE qué comprobó, y dice también qué no. Afirmar "la
-# protección coincide con el contrato" mirando 5 de los 11 campos que devuelve
-# la API sería prometer de más: un repo con `lock_branch: true`, o con
-# `restrictions` que excluya al desplegador, pasaría por aquí en verde con el
-# push de despliegue bloqueado.
-echo "$ETIQUETA Los CINCO campos que este guion verifica coinciden con lo esperado en la rama"
+# El verde dice EXACTAMENTE qué comprobó, y dice también qué no.
+echo "$ETIQUETA Los ONCE puntos que este guion verifica coinciden con lo esperado en la rama"
 echo "$ETIQUETA '$RAMA' de '$REPO':"
 echo "$ETIQUETA   required_status_checks.contexts = [\"$CONTEXTO_ESPERADO\"]"
 echo "$ETIQUETA   required_status_checks.strict   = false"
 echo "$ETIQUETA   enforce_admins.enabled          = false"
 echo "$ETIQUETA   allow_force_pushes.enabled      = true"
 echo "$ETIQUETA   allow_deletions.enabled         = false"
-echo "$ETIQUETA ALCANCE: este 0 NO afirma nada sobre el resto de la protección. La API devuelve"
-echo "$ETIQUETA más campos (lock_branch, restrictions, required_pull_request_reviews,"
-echo "$ETIQUETA required_conversation_resolution...) que este guion no mira."
+echo "$ETIQUETA   lock_branch.enabled             = false"
+echo "$ETIQUETA   block_creations.enabled         = false"
+echo "$ETIQUETA   required_linear_history.enabled = false"
+echo "$ETIQUETA   required_signatures.enabled     = false"
+echo "$ETIQUETA   required_pull_request_reviews   = ausente"
+echo "$ETIQUETA   restrictions                    = ausente (no se validan listas de actores)"
+echo "$ETIQUETA ALCANCE: fuera del contrato quedan allow_fork_syncing, required_conversation_resolution"
+echo "$ETIQUETA (solo PRs) y los repository rulesets, que este guion no consulta."
 exit 0
