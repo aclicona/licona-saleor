@@ -1282,6 +1282,11 @@ divergencia crece** y reaplicar a mano deja de ser realista.
    que pasó entre abril y agosto de 2026 — cuatro meses sin sincronizar, descubiertos
    por casualidad.
 4. Cerrar el issue de `upstream-minor` correspondiente.
+5. **Antes de dar la rama por verificada o desplegar un SHA de `stable/*`:** el run de
+   `CI del fork` con los tres jobs (Puerta rápida, Linters, Suite completa) está en verde
+   para ese SHA. El push que crea la rama lo dispara solo (B-666); para cualquier SHA
+   posterior, `gh workflow run ci-fork.yml --ref <rama> -f alcance=completo` y comprobar
+   con `gh run list --workflow ci-fork.yml --branch <rama>`.
 
 ### 2026-10-02 — `CELERY_BEAT_SCHEDULER` por defecto en settings (base: 3.23.37, B-700)
 

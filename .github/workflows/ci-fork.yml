@@ -61,8 +61,15 @@ env:
 # En `push` sobre `stable/*` eso significa que dos commits seguidos dejan viva solo la
 # alarma del segundo. No se pierde senal: el segundo run mide el arbol resultante, que
 # sigue teniendo la deriva mientras nadie la arregle.
+#
+# Excepcion: el push que CREA la rama (`github.event.created`) tiene grupo propio,
+# sufijo `-creacion`. Ese run es el unico en `push` que corre la suite completa (ver
+# abajo) y dura ~60 min; con el grupo comun, un segundo push poco despues de crear la
+# rama lo cancelaria y la verificacion completa del re-fork se perderia en silencio.
+# Con grupo aparte, el run de creacion termina y los pushes posteriores se cancelan
+# solo entre si. (B-666)
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}${{ github.event.created && '-creacion' || '' }}
   cancel-in-progress: true
 
 jobs:
@@ -70,7 +77,8 @@ jobs:
   # Puerta rapida: lo que un parche 3.22.x rompe de verdad contra los parches locales
   # del fork -- un import roto por un rename upstream, una migracion que falta, deriva
   # de configuracion. Corre SIEMPRE: en PR, en `alcance: rapido` y en `push` -- donde es
-  # el UNICO job que corre (ver las condiciones de `linters` y `suite` mas abajo).
+  # el UNICO job que corre salvo en el push que crea la rama (ver las condiciones de
+  # `linters` y `suite` mas abajo).
   #
   # Son SEIS parches locales, no diecinueve: `manage.py`, `saleor/asgi/__init__.py`,
   # `saleor/celeryconf.py`, `pyproject.toml`, la migracion `discount/0052` y el
@@ -162,7 +170,11 @@ jobs:
   # antigua evaluaba TRUE en `push` (no es dispatch, luego la or ya cortaba en true) y
   # anadir el trigger habria puesto los TRES jobs a correr en cada push -- 20 min de
   # linters y 60 de suite por commit, lo contrario de lo que se busca. `push` debe
-  # ejecutar solo la puerta.
+  # ejecutar solo la puerta, SALVO el push que crea la rama (`github.event.created`:
+  # re-fork o salto de minor), que corre los tres jobs. Motivo (B-666): el re-fork a
+  # 3.23 salio rojo en ruff (76 errores en .semgrep/) en el primer run y la suite
+  # completa dependia de que alguien la disparara a mano. Es un evento raro (una vez
+  # por minor), asi que el coste de 80 min de runner es asumible.
   #
   # Los parentesis del segundo termino tampoco son decorativos: en las expresiones de
   # GitHub `&&` liga mas fuerte que `||`, asi que sin ellos esto seria
@@ -173,7 +185,7 @@ jobs:
     runs-on: ubuntu-latest
     container: python:3.12
     timeout-minutes: 20
-    if: ${{ github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido') }}
+    if: ${{ (github.event_name != 'push' || github.event.created) && (github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido') }}
 
     steps:
       - uses: actions/checkout@v5
@@ -208,14 +220,15 @@ jobs:
   # tiene el secreto que haria falta) y quitarla ahorra minutos de runner.
   # Misma condicion que `linters`, incluido el corte en `push`: 60 min de runner por
   # commit no gatearian nada, porque Railway ya esta desplegando en paralelo sin
-  # esperar el resultado. En `push` la unica pregunta que se paga es la de la puerta.
+  # esperar el resultado. En `push` la unica pregunta que se paga es la de la puerta,
+  # salvo en el push que crea la rama (B-666), donde si se paga la suite completa.
   # ---------------------------------------------------------------------------
   suite:
     name: Suite completa (17k tests)
     runs-on: ubuntu-latest
     container: python:3.12
     timeout-minutes: 60
-    if: ${{ github.event_name != 'push' && (github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido') }}
+    if: ${{ (github.event_name != 'push' || github.event.created) && (github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido') }}
 
     services:
       postgres:
