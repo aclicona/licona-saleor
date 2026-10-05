@@ -384,6 +384,10 @@ con parche local y ya estaba en la lista de conflictos previsibles.
   llevaría a correr `migrate` contra una base apagada.
   Intérprete configurable con `${PYTHON:-python}` (local recibe `.venv/bin/python`; en la imagen
   vale el del PATH). `sh` POSIX puro, como los otros dos guiones de `scripts/`.
+  **Sonda de conexión previa (B-383):** antes de `migrate --check` corre `manage.py shell -c`
+  con `ensure_connection()` + `SELECT 1`; si falla, exit 2 directo (base o entorno), sin depender de
+  que `migrate --check` deje un Traceback. El Traceback / código≠1 se conserva como segunda red.
+  Pruebas con intérprete falso (sin Postgres): `sh scripts/tests/test_check_migrations.sh`.
 
 **Motivo:** vive en el fork porque la imagen del fork es el **único artefacto que viaja a todas las
 instancias de cliente**. Ahí una sola fuente sirve a sus tres llamadores —`dev.sh` en local, la

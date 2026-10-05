@@ -79,37 +79,27 @@ sin_ruido() {
           -e '^[[:space:]]*$'
 }
 
-# ─── 1. La pregunta ──────────────────────────────────────────────────────────
-"$PYTHON" manage.py migrate --check >"$TMP/check.out" 2>"$TMP/check.err"
-CODIGO=$?
-
-if [ "$CODIGO" -eq 0 ]; then
-  echo "$ETIQUETA La base está al día: no hay migraciones pendientes."
-  exit 0
-fi
-
-# ─── 2. ¿Es "faltan migraciones" o es "no pude preguntar"? ───────────────────
-# Con migraciones pendientes, `migrate --check` sale 1 en silencio absoluto.
-# Cualquier excepción no capturada (base caída, base inexistente, entorno roto)
-# deja un traceback. Ese, y no el exit code, es el discriminante fiable.
-# Un código distinto de 0 y 1 tampoco es "faltan migraciones": es una avería.
-if grep -q 'Traceback (most recent call last)' "$TMP/check.err" \
-   || grep -q 'CommandError\|ImproperlyConfigured\|ModuleNotFoundError' "$TMP/check.err" \
-   || [ "$CODIGO" -ne 1 ]; then
+# Diagnóstico común de "no pude preguntar" (exit 2). Lo comparten la sonda de
+# conexión y la red de respaldo de la sección 2, para no duplicar el mensaje.
+#   $1 — archivo con el stderr del comando que falló
+#   $2 — su exit code
+no_se_pudo_responder() {
+  ERR="$1"
+  COD="$2"
 
   # La línea reveladora, por orden de utilidad: el FATAL de Postgres, si no la
   # excepción de conexión, si no la última línea con contenido.
-  REVELADORA=$(sin_ruido <"$TMP/check.err" | grep 'FATAL:' | head -n 1)
-  [ -n "$REVELADORA" ] || REVELADORA=$(sin_ruido <"$TMP/check.err" | grep 'OperationalError' | head -n 1)
-  [ -n "$REVELADORA" ] || REVELADORA=$(sin_ruido <"$TMP/check.err" | tail -n 1)
-  [ -n "$REVELADORA" ] || REVELADORA="(sin mensaje; exit code $CODIGO)"
+  REVELADORA=$(sin_ruido <"$ERR" | grep 'FATAL:' | head -n 1)
+  [ -n "$REVELADORA" ] || REVELADORA=$(sin_ruido <"$ERR" | grep 'OperationalError' | head -n 1)
+  [ -n "$REVELADORA" ] || REVELADORA=$(sin_ruido <"$ERR" | tail -n 1)
+  [ -n "$REVELADORA" ] || REVELADORA="(sin mensaje; exit code $COD)"
 
   echo "$ETIQUETA NO SE PUDO RESPONDER si la base está al día."
   echo "$ETIQUETA Línea reveladora: $REVELADORA"
 
   # ¿La avería huele a base de datos o a entorno Python? Cambia el consejo, no
   # el veredicto: en ambos casos la respuesta es "no sé", nunca "faltan migraciones".
-  if grep -q 'OperationalError\|FATAL:\|could not connect\|connection failed' "$TMP/check.err"; then
+  if grep -q 'OperationalError\|FATAL:\|could not connect\|connection failed' "$ERR"; then
     echo "$ETIQUETA El problema es la BASE DE DATOS, no las migraciones."
     echo "$ETIQUETA Causa típica en local: Postgres apagado."
     echo "$ETIQUETA   brew services start postgresql@16"
@@ -123,6 +113,42 @@ if grep -q 'Traceback (most recent call last)' "$TMP/check.err" \
   echo "$ETIQUETA Esto NO quiere decir que falten migraciones. NO corras 'migrate'"
   echo "$ETIQUETA hasta que esto se arregle: migrar a ciegas no arregla nada y puede empeorarlo."
   exit 2
+}
+
+# ─── 0. Sonda de conexión ────────────────────────────────────────────────────
+# Antes de preguntar por migraciones, comprobar que se PUEDE preguntar: abrir
+# Django, conectar y ejecutar un `SELECT 1`. Esta sonda solo puede fallar por
+# entorno o conexión (nunca por migraciones pendientes), así que cualquier
+# exit code distinto de 0 es, sin ambigüedad, "no pude preguntar" (exit 2).
+"$PYTHON" manage.py shell -c "from django.db import connection; connection.ensure_connection(); connection.cursor().execute('SELECT 1')" \
+  >"$TMP/sonda.out" 2>"$TMP/sonda.err"
+CODIGO_SONDA=$?
+if [ "$CODIGO_SONDA" -ne 0 ]; then
+  no_se_pudo_responder "$TMP/sonda.err" "$CODIGO_SONDA"
+fi
+
+# ─── 1. La pregunta ──────────────────────────────────────────────────────────
+"$PYTHON" manage.py migrate --check >"$TMP/check.out" 2>"$TMP/check.err"
+CODIGO=$?
+
+if [ "$CODIGO" -eq 0 ]; then
+  echo "$ETIQUETA La base está al día: no hay migraciones pendientes."
+  exit 0
+fi
+
+# ─── 2. ¿Es "faltan migraciones" o es "no pude preguntar"? ───────────────────
+# El discriminante PRIMARIO es la sonda de la sección 0: si hemos llegado aquí,
+# la conexión funcionaba, así que un exit 1 de `migrate --check` significa
+# "faltan migraciones" sin depender de cómo Django formatee sus errores.
+# El Traceback queda como RESPALDO (defensa en profundidad): la base pudo
+# caerse entre la sonda y el check. Con migraciones pendientes, `migrate --check`
+# sale 1 en silencio absoluto; cualquier excepción no capturada deja un
+# traceback. Un código distinto de 0 y 1 tampoco es "faltan migraciones": es
+# una avería.
+if grep -q 'Traceback (most recent call last)' "$TMP/check.err" \
+   || grep -q 'CommandError\|ImproperlyConfigured\|ModuleNotFoundError' "$TMP/check.err" \
+   || [ "$CODIGO" -ne 1 ]; then
+  no_se_pudo_responder "$TMP/check.err" "$CODIGO"
 fi
 
 # ─── 3. Hay pendientes: decir cuáles ─────────────────────────────────────────
