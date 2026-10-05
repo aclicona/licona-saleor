@@ -34,6 +34,7 @@ All notable, unreleased changes to this project will be documented in this file.
 
 ### GraphQL API
 
+- Added `deprecationReason` field to the `App` and `Manifest` types, and a new `appSelfUpdate` mutation that lets an app set it on itself. An app declares it in its manifest (`deprecationReason`) and/or sets it at any time via `appSelfUpdate`; staff users cannot set it through `appUpdate`. Pass a blank value to `appSelfUpdate` to clear it; omitting the field or passing `null` leaves it unchanged. Values longer than 2048 characters are truncated rather than rejected. A deprecated app keeps working exactly as before - the field is informational and is surfaced in the dashboard.
 - Added `identifier` field to the `Webhook` type. It holds an app-provided, stable identifier that is unique per app. It can be set through the app manifest (`webhooks[].identifier`) and the `webhookCreate`/`webhookUpdate` mutations.
 - Added `Shop.allowStorefrontTraffic` field and `ShopSettingsInput.allowStorefrontTraffic` input. When disabled, only apps and staff users may call the GraphQL API directly; anonymous requests and non-staff customers are rejected with HTTP 401 and the `STOREFRONT_TRAFFIC_NOT_ALLOWED` error code.
 - Gift cards support as payment method within Transaction API (read more in the [docs](https://docs.saleor.io/developer/gift-cards#using-gift-cards-in-checkout)).
@@ -53,6 +54,8 @@ permissions.
 - Deprecated the `MANAGE_OBSERVABILITY` permission (`PermissionEnum`). The observability feature is no longer supported and the permission will be removed in Saleor 3.24.
 - Added `ID` sort field to `ProductVariantSortField`. Sorting by the variant primary key gives a stable order and stable cursors, unlike `LAST_MODIFIED_AT`, whose value changes when a variant is updated during pagination.
 - Sorting products by a numeric attribute (`products(sortBy: { attributeId: ... })`) now orders by the numeric value instead of its string representation, so `10` no longer sorts before `9`. The pagination cursor for attribute-sorted product lists gained a fourth field, so cursors issued before this change are rejected with `Received cursor is invalid`; a client paginating across the deploy must restart from the first page.
+- Added `externalReference` support to `Category`. Categories can now be created with an external reference, looked up using `category(externalReference: ...)`, and updated or deleted by external reference instead of ID. The reference can also be changed or cleared through `categoryUpdate`.
+- Added `externalReference` support to `Promotion`. Promotions can now be created with an external reference, looked up using `promotion(externalReference: ...)`, and updated or deleted by external reference instead of ID. The reference can also be changed or cleared through `promotionUpdate`.
 
 ### Webhooks
 
@@ -105,6 +108,7 @@ Validation is now performed on the frontend (Dashboard). This change increases v
 - Removed the setting `JWT_EXPIRE` which allowed to configure Saleor to ignore the JWT token expiration. - #18856 by @NyanKiyoshi
 - Removed support for custom `User` DB models in `./manage.py createsuperuser` command. - #18890 by @NyanKiyoshi
 - OIDC: When an existing user is claimed by an OIDC provider for the first time, their password is now invalidated to prevent login with stale credentials. This covers the case where a previously deleted staff account is recreated via OIDC.
+- Fixed migration `account.0103_create_default_customer_type` to respect `POPULATE_DEFAULTS`; the default customer type is no longer created when defaults are disabled, and the post-migration assignment task skips when none exists.
 
 #### Search improvements
 
