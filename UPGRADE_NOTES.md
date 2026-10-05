@@ -8,6 +8,44 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## Migraciones al preDeployCommand de saleor-api (2026-10-05, reporte B-386, parte 1/2)
+
+**Problema (B-386/B-387):** el `railway-entrypoint.sh` migraba al arrancar la api, pero worker y beat
+arrancaban a la vez con código nuevo sobre un esquema todavía viejo (carrera "código nuevo sobre
+esquema viejo"). Además `SKIP_MIGRATIONS` era una convención por variable, fácil de olvidar.
+
+**Cambio (parte 1, en el repo):**
+
+- `scripts/railway-entrypoint.sh` ya **no migra**: se quitó el bloque `migrate` y la rama
+  `SKIP_MIGRATIONS`. Conserva `wait-for-db.sh`, `CREATE_SUPERUSER` y `exec "$@"`. Se añadió el override
+  `WAIT_FOR_DB` (por defecto `/app/scripts/wait-for-db.sh`) solo para poder testearlo.
+- `scripts/wait-for-migrations.sh` — **nuevo, sin equivalente en upstream.** Envuelve
+  `check-migrations.sh` en un bucle (`MIGRATIONS_POLL_SECONDS`=10, `MIGRATIONS_WAIT_SECONDS`=600) y
+  falla (exit 1) al vencer. Nunca corre `migrate`.
+- Tests: `scripts/tests/test_wait_for_migrations.sh` y `scripts/tests/test_railway_entrypoint.sh`.
+- `Dockerfile`: solo el comentario del `ENTRYPOINT`.
+
+**Modelo resultante (se aplica en Railway en la parte 2, ventana de despliegue):**
+
+- **saleor-api** es el único migrador: `preDeployCommand` = `python manage.py migrate --noinput`.
+- **saleor-worker y saleor-beat**: `preDeployCommand` = `sh scripts/wait-for-migrations.sh`; esperan a que
+  la api deje la base a la altura del código.
+
+**Orden de despliegue obligatorio:** configurar el `preDeployCommand` de saleor-api **ANTES** de mergear
+este cambio. Con el entrypoint nuevo y sin preDeploy, un deploy no migra nada. El estado inverso
+(preDeploy configurado y entrypoint viejo) es inocuo: el `migrate` queda idempotente.
+
+**Gotchas:**
+
+- En un servicio con builder Dockerfile, `startCommand` **reemplaza el ENTRYPOINT** de la imagen:
+  saleor-worker nunca pasó por `railway-entrypoint.sh`, así que nunca migró por esa vía.
+- `SKIP_MIGRATIONS` queda **muerta** (nada la lee). Retirarla de las variables de Railway es decisión de
+  Andrés.
+- **Config as Code (`railway.json`) está deprecado, con corte el 2026-12-01.** Por eso el preDeployCommand
+  se configura como ajuste de servicio en Railway y no en `railway.json`.
+
+---
+
 ## Re-fork sobre 3.23.36 (2026-09-29, reporte B-588)
 
 Parte 2/4 del salto autorizado en B-584. La rama `stable/3.23` nace **del tag `3.23.36`** (estrategia A,

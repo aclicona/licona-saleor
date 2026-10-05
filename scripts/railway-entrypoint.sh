@@ -1,13 +1,12 @@
 #!/bin/sh
 set -e
 
-# Esperar a que la DB esté lista
-sh /app/scripts/wait-for-db.sh
+# Esperar a que la DB esté lista (override WAIT_FOR_DB solo para tests)
+sh "${WAIT_FOR_DB:-/app/scripts/wait-for-db.sh}"
 
-# Solo el servicio API corre migraciones (worker y beat usan SKIP_MIGRATIONS=true)
-if [ "${SKIP_MIGRATIONS}" != "true" ]; then
-  python manage.py migrate --noinput
-fi
+# Este entrypoint YA NO migra (B-386). Migra únicamente el preDeployCommand de
+# saleor-api (`python manage.py migrate --noinput`); worker y beat esperan con
+# scripts/wait-for-migrations.sh. Ver UPGRADE_NOTES.md (2026-10-05).
 
 # Crear superusuario si no existe (solo en primer deploy)
 if [ "$CREATE_SUPERUSER" = "true" ]; then

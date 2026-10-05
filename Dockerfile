@@ -63,7 +63,10 @@ LABEL org.opencontainers.image.title="saleor/saleor" \
   org.opencontainers.image.authors="Saleor Commerce (https://saleor.io)" \
   org.opencontainers.image.licenses="BSD-3-Clause"
 
-# Railway: usar ENTRYPOINT para migraciones automáticas.
+# Railway: ENTRYPOINT espera a la DB y crea el superusuario; NO migra (B-386).
+# Migra solo el preDeployCommand de saleor-api; worker/beat esperan con
+# scripts/wait-for-migrations.sh. Un startCommand de servicio reemplaza este
+# ENTRYPOINT.
 # Cada servicio (api/worker/beat) sobreescribe CMD según su rol.
 # Railway inyecta $PORT dinámicamente.
 ENTRYPOINT ["/bin/sh", "scripts/railway-entrypoint.sh"]
