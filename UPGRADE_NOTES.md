@@ -1282,11 +1282,25 @@ divergencia crece** y reaplicar a mano deja de ser realista.
    que pasó entre abril y agosto de 2026 — cuatro meses sin sincronizar, descubiertos
    por casualidad.
 4. Cerrar el issue de `upstream-minor` correspondiente.
-5. **Antes de dar la rama por verificada o desplegar un SHA de `stable/*`:** el run de
-   `CI del fork` con los tres jobs (Puerta rápida, Linters, Suite completa) está en verde
-   para ese SHA. El push que crea la rama lo dispara solo (B-666); para cualquier SHA
-   posterior, `gh workflow run ci-fork.yml --ref <rama> -f alcance=completo` y comprobar
-   con `gh run list --workflow ci-fork.yml --branch <rama>`.
+5. **Antes de dar la rama por verificada o desplegar un SHA de `stable/*`:** correr, desde la
+   raíz del repo `ecommerce` (no desde este fork), el guard
+   `scripts/railway-seguro/ci_desplegable.py` (B-792):
+   ```sh
+   python3 scripts/railway-seguro/ci_desplegable.py --rama stable/<LINEA>
+   ```
+   Pregunta a `gh` si algún run de `ci-fork.yml` sobre el HEAD **remoto** de la rama tiene el job
+   `Suite completa (17k tests)` en `success`. Exit 0 = desplegable (stdout:
+   `sha=<sha> run=<id> job=success`); 1 = rechazo (sin runs, runs en curso, suite sin success);
+   2 = indeterminado (`gh` sin sesión, rama inexistente, ningún job con ese nombre). **1 y 2
+   bloquean.** El push que crea la rama dispara la suite solo (B-666); para cualquier SHA
+   posterior, el rechazo imprime el dispatch:
+   ```sh
+   GH_REPO=aclicona/licona-saleor gh workflow run ci-fork.yml --ref stable/<LINEA> -f alcance=completo
+   ```
+   y se repite el guard cuando el run termine. El guard es un paso previo procedimental: no
+   intercepta el `redeploy` ni cubre el auto-deploy por push a `stable/*`. **Acoplamiento:** compara
+   por igualdad con el `name:` del job `suite` de `ci-fork.yml`; no renombrar ese job sin cambiar
+   `JOB_SUITE` en el guard (lo vigila `saleor/tests/test_fork_branch_protection_drift.py`).
 
 ### 2026-10-02 — `CELERY_BEAT_SCHEDULER` por defecto en settings (base: 3.23.37, B-700)
 

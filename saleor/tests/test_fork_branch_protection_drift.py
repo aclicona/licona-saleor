@@ -241,3 +241,30 @@ def test_guion_404_con_rama_protegida_es_no_se(tmp_path):
 
 def test_guion_404_con_rama_sin_proteger_es_deriva(tmp_path):
     assert _ejecutar_guion(tmp_path, None, caso="404", protegida="false") == 1
+
+
+# Cadena literal de la que depende el guard del repo raíz `ecommerce`
+# (`scripts/railway-seguro/ci_desplegable.py`, constante `JOB_SUITE`, B-792/B-822).
+NOMBRE_JOB_SUITE = "Suite completa (17k tests)"
+
+
+def test_existe_un_job_con_el_nombre_que_espera_el_guard_de_ci_desplegable():
+    """El guard de encendido busca el job de suite por igualdad con esta cadena.
+
+    `scripts/railway-seguro/ci_desplegable.py` (repo raíz, fuera de este fork)
+    declara `JOB_SUITE = "Suite completa (17k tests)"` y solo da luz verde si un
+    run de `ci-fork.yml` trae un job con ESE `name:` en `success`. Si alguien
+    renombra el job, el guard sale con exit 2 («ningún job se llama ...») y
+    bloquea todo encendido. Cómo arreglarlo: cambia a la vez el `name:` del job
+    y `JOB_SUITE` en el guard del raíz (y la cadena de este test).
+    """
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    # Sin `name:`, GitHub muestra el id del job; se replica ese fallback.
+    nombres = [job.get("name", id_job) for id_job, job in jobs.items()]
+    assert NOMBRE_JOB_SUITE in nombres, (
+        f"Ningún job de {WORKFLOW} se llama '{NOMBRE_JOB_SUITE}' (nombres: "
+        f"{nombres}). El guard `scripts/railway-seguro/ci_desplegable.py` del "
+        "repo raíz compara `JOB_SUITE` por igualdad con esa cadena: renombrar "
+        "el job sin actualizarlo hace que el guard dé exit 2 y bloquee todo "
+        "encendido."
+    )
