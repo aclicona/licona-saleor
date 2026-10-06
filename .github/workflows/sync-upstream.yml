@@ -599,7 +599,7 @@ jobs:
 
           echo "Fork en $CURRENT | siguiente minor: $NEXT (${LATEST:-aún no publicado}) | minors por delante: $BEHIND"
 
-      - name: Abrir issue si el siguiente minor ya está publicado
+      - name: Crear o actualizar el issue del siguiente minor
         if: steps.next.outputs.latest != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -608,59 +608,7 @@ jobs:
           NEXT: ${{ steps.next.outputs.next }}
           LATEST: ${{ steps.next.outputs.latest }}
           BEHIND: ${{ steps.next.outputs.behind }}
-        run: |
-          set -euo pipefail
-
-          TITLE="chore: Saleor ${NEXT} disponible — siguiente minor del fork"
-
-          # Idempotencia: un issue por minor, no uno por lunes. Se busca por título
-          # exacto entre los abiertos; si se cierra a mano, no vuelve a abrirse hasta
-          # que el fork avance de minor y el título cambie.
-          EXISTING=$(gh issue list --state open --label upstream-minor --limit 100 \
-                     --json number,title \
-                     | jq -r --arg t "$TITLE" 'map(select(.title == $t)) | .[0].number // empty')
-
-          if [ -n "$EXISTING" ]; then
-            echo "Ya existe el issue #$EXISTING para ${NEXT} — nada que hacer."
-            exit 0
-          fi
-
-          cat > /tmp/issue-body.md <<EOF
-          El fork está en **${CURRENT}** y upstream ya publicó **${LATEST}**.
-          Minors por delante en total: **${BEHIND}**.
-
-          ## Por qué esto es un issue y no un PR
-
-          Saleor solo garantiza migraciones sin downtime **entre minors consecutivos**. No se
-          puede saltar de ${CURRENT} a un minor posterior directamente: hay que pasar por
-          ${NEXT} primero. Por eso el salto de minor es una decisión humana planificada y no un
-          merge automático — el job \`sync\` de este mismo workflow solo trae parches dentro de
-          ${CURRENT}.x.
-
-          Cuantos más minors se acumulen, más caro sale: no se paga un upgrade, se pagan todos
-          los intermedios, cada uno con su tanda de migraciones.
-
-          ## Qué hay que hacer
-
-          1. Leer el changelog de upstream entre \`${CURRENT}\` y \`${LATEST}\`, con foco en
-             migraciones y cambios de esquema GraphQL.
-          2. Revisar \`UPGRADE_NOTES.md\` — ahí está todo lo que este fork cambió respecto a
-             upstream, que es exactamente donde van a aparecer los conflictos.
-          3. Rama de upgrade desde \`stable/${CURRENT}\`, merge de \`refs/tags/${LATEST}\`,
-             resolver conflictos.
-          4. Correr las migraciones contra una copia de la BD, no solo la suite.
-          5. Verificar el storefront y las apps de pago contra la API nueva: el esquema GraphQL
-             cambia entre minors y el codegen del storefront depende de él.
-          6. Al terminar: actualizar \`version\` en \`pyproject.toml\`, renombrar la rama base a
-             \`stable/${NEXT}\` y **cambiar la rama por defecto del repo** — si no, este
-             workflow deja de correr (ver el comentario al inicio de \`sync-upstream.yml\`).
-
-          ---
-          _Abierto automáticamente por \`.github/workflows/sync-upstream.yml\`. Se reabre cada
-          lunes mientras el fork siga en ${CURRENT}; ciérralo cuando el upgrade esté planificado._
-          EOF
-
-          gh issue create \
-            --title "$TITLE" \
-            --label "upstream-minor" \
-            --body-file /tmp/issue-body.md
+        # La lógica vive en un guion testeable (scripts/tests/test_upsert_upstream_minor_issue.sh).
+        # Idempotiza por LABEL y actualiza título/cuerpo: antes solo creaba y el cuerpo
+        # se congelaba el día de creación (B-618).
+        run: sh scripts/upsert-upstream-minor-issue.sh
