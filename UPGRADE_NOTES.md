@@ -1453,3 +1453,36 @@ Test: `saleor/payment/tests/test_report_orphan_transactions.py`.
 
 **Propuesta para Andrés (NO implementada):** tarea Celery/comando de limpieza con `--apply` explícito, batches y
 umbral ≥30 días, solo sobre lo que el diagnóstico liste. Primero correr el diagnóstico en producción y revisar muestra.
+
+## B-378 — inventario de workflows heredados de upstream (SIN cambios: propuesta para Andrés)
+
+`.github/workflows/` tiene 22 archivos: 3 del fork (`ci-fork.yml`, `security-scan.yml`, `sync-upstream.yml`) y
+**19 heredados de upstream** (el backlog decía 20 de 23: ya no coincide). Análisis por lectura de triggers y
+guardas `if:`; **no se revisó el historial de runs**. Regla vigente: borrar en el árbol, nunca `gh workflow
+disable`; el sync ya restaura el directorio desde la base, así que el borrado persiste.
+
+Rama por defecto del fork: `stable/3.23`; no existe rama `main` en `origin`.
+
+| Workflow | Trigger | ¿Corre en el fork? | Propuesta |
+|---|---|---|---|
+| `publish-main.yml` | push a `main`, `ci/**` | No (no hay `main`) | Borrar |
+| `publish-containers.yml` | `workflow_call` | Solo lo llaman `publish-main` y `create-tag-with-release-pr` | Borrar (con los dos) |
+| `create-tag-with-release-pr.yml` | PR cerrado/merge | Posible, pero usa vault y `saleor-multitenant` de Saleor Inc. | Borrar |
+| `publish-load-test.yml` | PR (reopened/synchronize/labeled), cualquier rama | Solo con label; usa infra de Saleor | Borrar |
+| `test-env-deploy.yml` / `test-env-cleanup.yml` | PR (cualquier rama) | Corren en cada PR; infra AWS de Saleor | Borrar |
+| `bump-dependencies.yml` | cron mensual + manual | Cron guardado por `saleor/saleor` → no; manual sí | Borrar |
+| `e2e.yml` | cron (guardado), manual y **PR opened/synchronize** | La guarda solo cubre el cron: **corre en cada PR** | Borrar (prioridad: ruido/coste) |
+| `tests-and-linters.yml` | PR (cualquier base) y push a `main` | **Corre en cada PR**; solapa con `ci-fork.yml` | Borrar si `ci-fork.yml` cubre linters+suite; confirmar |
+| `check-licenses.yaml` | PR con cambios en lockfiles | Sí; llama a un workflow reusable de repo privado de Saleor | Borrar |
+| `check-migration-tasks.yml` | PR (cualquier base) | Sí; chequea config de tareas de migración | Revisar: conservar si sirve |
+| `graphql-inspector.yml` | PR que toca `*.graphql` | Sí | Revisar: útil para el contrato del schema |
+| `test-semgrep-rules.yml` | push/PR que toca `.semgrep/**` | Casi nunca | Borrar o conservar (inocuo) |
+| `changelog-check.yml` | PR a `main` | No (base `main`) | Borrar |
+| `migrations-perf-test-check.yml` | PR a `main` | No | Borrar |
+| `migrations-perf-test.yml` | PR con label, guardado por `saleor/saleor` | No | Borrar |
+| `test-migrations-compatibility.yml` | PR a `3.*` o `main` | No (las bases son `stable/*`: el glob `3.*` no casa) | Borrar o re-apuntar a `stable/*` si se quiere esa prueba |
+| `github-releases-to-discord.yml` | `release` | Solo si el fork publica releases; requiere webhook de Saleor | Borrar |
+| `help-wanted-issues-to-discord.yml` | `issues` | Sí, en issues con label; requiere secreto ausente | Borrar |
+
+Resumen: borrar 15 con seguridad razonable, decidir 4 (`tests-and-linters`, `check-migration-tasks`,
+`graphql-inspector`, `test-semgrep-rules`). Pendiente de confirmar con historial de runs antes de borrar.
