@@ -153,7 +153,7 @@
 #   · `sync-upstream.yml` (ver su cabecera, líneas 3-18) no corrió NI UNA VEZ
 #     entre abril y agosto de 2026. Cuatro meses sin sincronizar, sin un solo
 #     aviso, y el PR #3 acabó mergeando DOS CVE con CERO checks.
-#   · `UPGRADE_NOTES.md` (líneas 448-459) fija la regla: «Lo que no está en el
+#   · `UPGRADE_NOTES.md` (regla «Lo que no está en el árbol no existe para la instancia N+1») fija: «Lo que no está en el
 #     árbol no existe para la instancia N+1. Se borra en el árbol, NUNCA con
 #     `gh workflow disable` ni desde la UI de Actions», porque el estado
 #     `disabled` vive en la base de datos de GitHub y NO SE CLONA.
@@ -311,7 +311,7 @@ consejo_workflows() {
   echo "$ETIQUETA     cron vuelve a contar desde cero. Mira si hay un motivo de fondo (el repo"
   echo "$ETIQUETA     llevaba meses quieto) antes de dar el problema por resuelto."
   echo "$ETIQUETA   · Si se apagó A MANO ('disabled_manually'), ESE ES EL BUG. Lee la regla de"
-  echo "$ETIQUETA     UPGRADE_NOTES.md (líneas 448-459): el estado 'disabled' NO SE CLONA, así"
+  echo "$ETIQUETA     UPGRADE_NOTES.md, regla «Lo que no está en el árbol no existe para la instancia N+1»: 'disabled' NO SE CLONA, así"
   echo "$ETIQUETA     que la réplica del cliente arranca con el cron rojo el día uno. Lo que no"
   echo "$ETIQUETA     debe correr SE BORRA DEL ÁRBOL, nunca se deshabilita por la UI."
   echo "$ETIQUETA   · El comando existe, pero MUTA y NO es solo-lectura. Úsalo a sabiendas:"
@@ -581,7 +581,7 @@ for RUTA_PROPIA in $WORKFLOWS_PROPIOS; do
       echo "$ETIQUETA   Consecuencia: alguien usó la UI de Actions en vez de borrar el archivo."
       echo "$ETIQUETA   Ese estado NO SE CLONA (vive en la base de datos de GitHub, no en el"
       echo "$ETIQUETA   árbol), así que la réplica del cliente arranca con el cron ROJO el día"
-      echo "$ETIQUETA   uno. UPGRADE_NOTES.md líneas 448-459: 'Se borra en el árbol, NUNCA con"
+      echo "$ETIQUETA   uno. UPGRADE_NOTES.md, regla «Lo que no está en el árbol no existe para la instancia N+1»: 'Se borra en el árbol, NUNCA con"
       echo "$ETIQUETA   gh workflow disable'."
     else
       echo "$ETIQUETA   Consecuencia: en '$ESTADO_PROPIO' el workflow no corre. Si el estado es"
@@ -617,7 +617,7 @@ while IFS= read -r RUTA_WF; do
     echo "$ETIQUETA   Consecuencia: ese workflow está en el árbol pero no corre. Si se apagó a"
     echo "$ETIQUETA   mano, ese estado NO SE CLONA a la réplica del cliente, que arrancará"
     echo "$ETIQUETA   ejecutándolo (y fallando) desde el día uno. La regla del fork es que lo"
-    echo "$ETIQUETA   que no debe correr SE BORRA DEL ÁRBOL (UPGRADE_NOTES.md líneas 448-459)."
+    echo "$ETIQUETA   que no debe correr SE BORRA DEL ÁRBOL (UPGRADE_NOTES.md, regla «Lo que no está en el árbol no existe para la instancia N+1»)."
   fi
 done <"$TMP/api.sorted"
 
