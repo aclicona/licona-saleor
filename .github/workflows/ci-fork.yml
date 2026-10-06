@@ -114,10 +114,17 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Instalar dependencias de sistema
+        run: |
+          apt-get update -qq
+          apt-get install -y libpq-dev jq
+
       # Tests de los guiones de scripts/ (sh POSIX, sin Django ni Postgres, con
       # intérpretes/`gh` falsos): sin este paso nada los corre y un refactor de un
       # guion podria romper su contrato sin que nadie lo vea (B-858). Va antes de
-      # `uv sync` porque no necesita el entorno. Un test que falla da exit != 0.
+      # `uv sync` porque no necesita el entorno. Va DESPUÉS de las dependencias de
+      # sistema porque el contenedor python:3.12 no trae `jq` (sin `apt-get update` no
+      # lo encuentra) y los guiones lo usan. Un test que falla da exit != 0.
       - name: Tests de los guiones (scripts/tests)
         run: |
           set -u
@@ -129,10 +136,6 @@ jobs:
             n=$((n + 1))
           done
           echo "$n archivos de test de guiones pasaron."
-
-      - name: Instalar dependencias de sistema
-        run: |
-          apt-get install -y libpq-dev
 
       - uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.0.0
         with:
