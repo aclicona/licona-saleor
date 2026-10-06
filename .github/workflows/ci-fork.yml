@@ -108,6 +108,22 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Tests de los guiones de scripts/ (sh POSIX, sin Django ni Postgres, con
+      # intérpretes/`gh` falsos): sin este paso nada los corre y un refactor de un
+      # guion podria romper su contrato sin que nadie lo vea (B-858). Va antes de
+      # `uv sync` porque no necesita el entorno. Un test que falla da exit != 0.
+      - name: Tests de los guiones (scripts/tests)
+        run: |
+          set -u
+          n=0
+          for t in scripts/tests/test_*.sh; do
+            [ -e "$t" ] || { echo "No hay tests en scripts/tests/"; exit 1; }
+            echo "=== $t"
+            sh "$t" || exit 1
+            n=$((n + 1))
+          done
+          echo "$n archivos de test de guiones pasaron."
+
       - name: Instalar dependencias de sistema
         run: |
           apt-get install -y libpq-dev
