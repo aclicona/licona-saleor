@@ -1439,3 +1439,17 @@ mergeado (merge commit; con squash el commit del tag no sería ancestro y se omi
 3.23.x): `git fetch upstream --tags && PUSH_TAGS=true sh scripts/publish-upstream-tags.sh 3.22 3.23`, desde una
 checkout con `TARGET_REF` apuntando a la rama que contenga el código; (c) confirmar que el `GITHUB_TOKEN` puede
 empujar tags (si hay reglas de protección de tags, hará falta excepción).
+
+## B-418 — diagnóstico de `TransactionItem` huérfanos (solo lectura)
+
+**Investigación:** Saleor no ofrece limpieza de `TransactionItem`. `clean_checkouts` (`saleor/checkout/tasks.py`)
+borra checkouts viejos sin transacciones con valor, y `TransactionItem.checkout` es `on_delete=SET_NULL`:
+el item de un intento fallido (creado por `transactionInitialize` antes de llamar a la App) sobrevive
+al checkout, con `checkout` y `order` nulos, para siempre.
+
+**Añadido (fork):** `python manage.py report_orphan_transactions --days N [--list K]` cuenta (y opcionalmente
+lista) los `TransactionItem` sin orden, sin evento `*_success` y creados hace más de N días. No modifica nada.
+Test: `saleor/payment/tests/test_report_orphan_transactions.py`.
+
+**Propuesta para Andrés (NO implementada):** tarea Celery/comando de limpieza con `--apply` explícito, batches y
+umbral ≥30 días, solo sobre lo que el diagnóstico liste. Primero correr el diagnóstico en producción y revisar muestra.
