@@ -1387,3 +1387,10 @@ despliegue (`lock_branch`, `restrictions`, `required_pull_request_reviews`...: f
 - `saleor/tests/test_fork_branch_protection_drift.py` gana una matriz (`gh` falso + `jq`, se salta
   si no hay `jq`): conforme→0; cada campo del contrato roto→1; cuerpo vacío o `{}`→2; 404 con
   rama protegida→2, sin proteger→1.
+
+## B-841 — drift del input `alcance=completo` de `ci-fork.yml`
+
+- `saleor/tests/test_fork_branch_protection_drift.py` gana un test que lee el YAML y exige
+  `on.workflow_dispatch.inputs.alcance` con `completo` en `options`: es el comando que imprime
+  `scripts/railway-seguro/ci_desplegable.py` (repo raíz). El nombre del archivo `ci-fork.yml` queda cubierto
+  porque el módulo lo lee por ruta.
