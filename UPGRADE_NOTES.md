@@ -1396,3 +1396,11 @@ despliegue (`lock_branch`, `restrictions`, `required_pull_request_reviews`...: f
 - `wait-for-migrations.sh` trata cualquier código distinto de 0 como "reintentar", así que con 3 espera y vence
   con exit 1 al agotar `MIGRATIONS_WAIT_SECONDS`.
 - Prueba: `sh scripts/tests/test_check_migrations.sh` (casos 7-9, intérprete falso).
+
+## B-388 — hooks de pre-commit resuelven el venv solos
+
+- Nuevo `scripts/with-venv.sh`: antepone `<raíz>/.venv/bin` (o el del clone principal, vía
+  `git rev-parse --git-common-dir`, en un worktree) al PATH y falla cerrado (exit 1) si no hay venv o no tiene
+  el comando. Lo usan los hooks `mypy`, `deptry`, `migrations-check` y `gql-schema-check` de
+  `.pre-commit-config.yaml` (divergencia local del fork: `deptry` pasa a `language: system`).
+- Prueba: `sh scripts/tests/test_with_venv.sh`.
