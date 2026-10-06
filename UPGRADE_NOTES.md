@@ -1387,3 +1387,17 @@ despliegue (`lock_branch`, `restrictions`, `required_pull_request_reviews`...: f
 - `saleor/tests/test_fork_branch_protection_drift.py` gana una matriz (`gh` falso + `jq`, se salta
   si no hay `jq`): conforme→0; cada campo del contrato roto→1; cuerpo vacío o `{}`→2; 404 con
   rama protegida→2, sin proteger→1.
+
+## B-418 — diagnóstico de `TransactionItem` huérfanos (solo lectura)
+
+**Investigación:** Saleor no ofrece limpieza de `TransactionItem`. `clean_checkouts` (`saleor/checkout/tasks.py`)
+borra checkouts viejos sin transacciones con valor, y `TransactionItem.checkout` es `on_delete=SET_NULL`:
+el item de un intento fallido (creado por `transactionInitialize` antes de llamar a la App) sobrevive
+al checkout, con `checkout` y `order` nulos, para siempre.
+
+**Añadido (fork):** `python manage.py report_orphan_transactions --days N [--list K]` cuenta (y opcionalmente
+lista) los `TransactionItem` sin orden, sin evento `*_success` y creados hace más de N días. No modifica nada.
+Test: `saleor/payment/tests/test_report_orphan_transactions.py`.
+
+**Propuesta para Andrés (NO implementada):** tarea Celery/comando de limpieza con `--apply` explícito, batches y
+umbral ≥30 días, solo sobre lo que el diagnóstico liste. Primero correr el diagnóstico en producción y revisar muestra.
