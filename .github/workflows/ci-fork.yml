@@ -1,9 +1,15 @@
 # CI propia del fork (aclicona/licona-saleor). NO existe en el repo upstream de Saleor.
 #
 # Por que un archivo nuevo y no un arreglo de `tests-and-linters.yml`:
-#   1. Ese workflow esta en `state: deleted` en la API de Actions de GitHub para este
-#      fork: el archivo existe en `stable/3.22`, pero GitHub no lo tiene registrado, no
-#      corre nunca y `gh workflow run` contra el falla.
+#   1. Ese workflow NO sirve como CI de las ramas `stable/*` de este fork: solo dispara
+#      con `pull_request` y con `push` a `main`, y no tiene `workflow_dispatch`, asi que
+#      ni una rama `stable/*` lo dispara por push ni se puede lanzar a mano con
+#      `gh workflow run`. (Una version anterior de este comentario decia que estaba en
+#      `state: deleted` en la API de Actions. Falso: B-595 midio el 2026-09-26
+#      `state: active`, id 340320362, y 24 registros que cuadran con el arbol; ver el
+#      reporte B-595. No se re-midio al corregir esto. Que la falta de
+#      `workflow_dispatch` sea la causa del `gh workflow run` fallido original es una
+#      hipotesis del reporte, no medida.)
 #   2. Ademas es un archivo de upstream. Tocarlo paga deuda de merge en cada sync 3.22.x.
 #      Un archivo con nombre propio (`ci-fork.yml`) tiene cero conflictos por definicion.
 #
