@@ -1404,3 +1404,10 @@ despliegue (`lock_branch`, `restrictions`, `required_pull_request_reviews`...: f
   el comando. Lo usan los hooks `mypy`, `deptry`, `migrations-check` y `gql-schema-check` de
   `.pre-commit-config.yaml` (divergencia local del fork: `deptry` pasa a `language: system`).
 - Prueba: `sh scripts/tests/test_with_venv.sh`.
+
+## B-841 — drift del input `alcance=completo` de `ci-fork.yml`
+
+- `saleor/tests/test_fork_branch_protection_drift.py` gana un test que lee el YAML y exige
+  `on.workflow_dispatch.inputs.alcance` con `completo` en `options`: es el comando que imprime
+  `scripts/railway-seguro/ci_desplegable.py` (repo raíz). El nombre del archivo `ci-fork.yml` queda cubierto
+  porque el módulo lo lee por ruta.

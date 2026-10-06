@@ -268,3 +268,44 @@ def test_existe_un_job_con_el_nombre_que_espera_el_guard_de_ci_desplegable():
         "el job sin actualizarlo hace que el guard dé exit 2 y bloquee todo "
         "encendido."
     )
+
+
+# Segunda y tercera cadena de la que depende el mismo guard (B-841): el nombre
+# del archivo `ci-fork.yml` (constante `WORKFLOW` del guard; ya lo cubre
+# implícitamente `WORKFLOW` de este módulo, que lo lee por ruta y falla si
+# desaparece) y el input `alcance` con la opción `completo` del
+# `workflow_dispatch`, que es el comando de dispatch que el guard imprime en
+# sus rechazos (`gh workflow run ci-fork.yml -f alcance=completo`).
+INPUT_ALCANCE = "alcance"
+VALOR_ALCANCE_COMPLETO = "completo"
+
+
+def test_workflow_dispatch_admite_alcance_completo_como_espera_el_guard():
+    """`on.workflow_dispatch.inputs.alcance` existe y admite `completo`.
+
+    `scripts/railway-seguro/ci_desplegable.py` (repo raíz) imprime, al rechazar,
+    un `gh workflow run ci-fork.yml -f alcance=completo`. Si se renombra el
+    input o su opción, el comando impreso deja de funcionar y el encendido
+    queda bloqueado sin salida clara. Cómo arreglarlo: cambia a la vez el input
+    en `ci-fork.yml` y el comando/constantes del guard del raíz.
+    """
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    # PyYAML (YAML 1.1) parsea la clave `on` como el booleano True.
+    disparadores = workflow.get("on", workflow.get(True))
+    assert isinstance(disparadores, dict), f"{WORKFLOW} no declara `on:` como mapa."
+    assert "workflow_dispatch" in disparadores, (
+        f"{WORKFLOW} ya no declara `workflow_dispatch`: el guard no puede "
+        "disparar la suite completa."
+    )
+    inputs = (disparadores["workflow_dispatch"] or {}).get("inputs") or {}
+    assert INPUT_ALCANCE in inputs, (
+        f"`workflow_dispatch` de {WORKFLOW} no tiene el input "
+        f"'{INPUT_ALCANCE}' (tiene: {list(inputs)}); el comando de dispatch "
+        "del guard `ci_desplegable.py` dejaría de funcionar."
+    )
+    alcance = inputs[INPUT_ALCANCE] or {}
+    if alcance.get("type") == "choice":
+        assert VALOR_ALCANCE_COMPLETO in alcance.get("options", []), (
+            f"El input '{INPUT_ALCANCE}' es `choice` pero sus opciones "
+            f"{alcance.get('options')} no incluyen '{VALOR_ALCANCE_COMPLETO}'."
+        )
