@@ -83,6 +83,7 @@ sin_ruido() {
           -e 'It will be compatible before version' \
           -e 'from authlib\.jose import' \
           -e '^ \[PID:' \
+          -e 'objects imported automatically' \
           -e '^[[:space:]]*$'
 }
 
@@ -145,7 +146,11 @@ if [ "$CODIGO" -eq 0 ]; then
 from django.db import connection
 from django.db.migrations.loader import MigrationLoader
 loader = MigrationLoader(connection, ignore_no_migrations=True)
-for app, name in sorted(set(loader.applied_migrations) - set(loader.disk_migrations)):
+# Las migraciones squasheadas declaran el atributo replaces: sobre una base NUEVA, migrate
+# registra como aplicadas las reemplazadas (p. ej. cart.* -> checkout.*) aunque ya no
+# existan en disco. No son por delante del código (B-911).
+reemplazadas = {key for m in loader.disk_migrations.values() for key in m.replaces}
+for app, name in sorted(set(loader.applied_migrations) - set(loader.disk_migrations) - reemplazadas):
     print(app + '.' + name)
 " >"$TMP/adelante.out" 2>"$TMP/adelante.err"
   CODIGO_ADELANTE=$?
