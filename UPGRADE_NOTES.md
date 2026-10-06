@@ -8,6 +8,36 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## Config-as-code por servicio de Railway (2026-10-06, reporte B-876)
+
+**Qué hay:** `railway.saleor-api.json`, `railway.saleor-worker.json` y `railway.saleor-beat.json`
+reproducen **exactamente** el preDeployCommand, startCommand y healthcheck que hoy viven en el panel
+de Railway (leídos el 2026-10-06), más lo que ya aporta `railway.json` (builder DOCKERFILE,
+restart ON_FAILURE x3). `scripts/tests/test_railway_config.sh` (lo corre `ci-fork.yml`) verifica:
+api migra en su preDeploy; worker/beat solo esperan (`sh scripts/wait-for-migrations.sh`); los
+startCommand coinciden con el panel.
+
+**Estado: documentación verificada, NO fuente activa.** Ningún servicio apunta aún a estos archivos
+(todos leen `railway.json` por defecto). Para activarlos, Andrés debe, en el panel de Railway
+(proyecto licona-store, entorno production), por servicio: *Settings -> Config-as-code -> ruta del
+archivo* = `/railway.saleor-api.json` (api), `/railway.saleor-worker.json` (worker),
+`/railway.saleor-beat.json` (beat) y verificar en el siguiente deploy (icono de archivo en el detalle
+del deployment) que los valores vienen del archivo. Ojo: con ruta personalizada el servicio **deja de
+leer `railway.json`**; por eso cada archivo es autosuficiente. `preDeployTimeoutSeconds` (900) no
+está en el esquema de config-as-code y sigue solo en el panel. Cualquier cambio en el panel o en el
+archivo debe replicarse en el otro (el test solo ve el archivo).
+
+**Gotcha — startCommand vs ENTRYPOINT:** con Dockerfile, un start command configurado **sustituye
+al ENTRYPOINT** de la imagen en forma exec (https://docs.railway.com/deployments/start-command).
+Consecuencia hoy: `saleor-beat` invoca `railway-entrypoint.sh` a mano (wait-for-db + CREATE_SUPERUSER
++ exec) pero `saleor-worker` **no lo corre** (su startCommand es `sh -c 'celery ...'`); worker se
+apoya en su preDeploy `wait-for-migrations.sh` (que ya exige DB accesible). `saleor-api` no tiene
+startCommand: usa ENTRYPOINT+CMD del Dockerfile. Nota: config-as-code está **deprecado** en Railway
+(archivos existentes funcionan hasta 2026-12-01; sucesor: Infrastructure as Code,
+`.railway/railway.ts`), así que esto es un puente.
+
+---
+
 ## Migraciones al preDeployCommand de saleor-api (2026-10-05, reporte B-386, parte 1/2)
 
 **Problema (B-386/B-387):** el `railway-entrypoint.sh` migraba al arrancar la api, pero worker y beat

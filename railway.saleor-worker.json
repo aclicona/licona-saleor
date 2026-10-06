@@ -1,0 +1,18 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile",
+    "nixpacksPlan": {
+      "providers": []
+    }
+  },
+  "deploy": {
+    "startCommand": "sh -c 'celery -A saleor worker -E --concurrency=4'",
+    "preDeployCommand": [
+      "sh scripts/wait-for-migrations.sh"
+    ],
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 3
+  }
+}
