@@ -1537,6 +1537,12 @@ Andrés aprobó borrar los que el inventario de arriba marca «Borrar». Borrado
 `sync-upstream.yml`, más `smoke-imagen.yml`, B-911). `tests-and-linters.yml` sigue corriendo en cada PR y solapa con
 `ci-fork.yml`: pendiente de la decisión de Andrés.
 
+**Actualización 2026-10-06 (decisión de Andrés):** `tests-and-linters.yml` también se **borra**. `ci-fork.yml` cubre lo
+mismo (puerta rápida, linters por pre-commit y suite completa) y es la CI que el fork mantiene; la de upstream solo
+duplicaba minutos en cada PR. Las menciones en comentarios de `ci-fork.yml`, `sync-upstream.yml`,
+`check-github-settings.sh` y en esta nota son historia (por qué existe `ci-fork.yml`) y se conservan. Quedan 3 «a
+decidir»: `check-migration-tasks.yml`, `graphql-inspector.yml` y `test-semgrep-rules.yml`.
+
 **Coste de sync cero, comprobado:** `sync-upstream.yml` hace `rm -rf .github/workflows` y
 `git checkout "$BASE_SHA" -- .github/workflows/` tras el merge del tag, así que restaura el directorio desde el
 árbol del fork (no desde upstream) y los borrados persisten (mismo mecanismo que `test-env-cleanup-cron.yml`).
