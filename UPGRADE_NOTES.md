@@ -1543,3 +1543,17 @@ Andrés aprobó borrar los que el inventario de arriba marca «Borrar». Borrado
 Lo que sí hay que repetir a mano es el **re-fork a una minor nueva** (copia el árbol de upstream): volver a borrar
 estos 15 (o partir de `stable/3.23`). Ningún workflow restante referencia uno borrado (`ci-fork.yml` solo llama al
 nuevo `smoke-imagen.yml`).
+
+## B-911 — smoke de la imagen Docker (2026-10-06)
+
+`scripts/smoke-imagen.sh <imagen>` levanta un Postgres efímero y comprueba con la imagen real: el ENTRYPOINT no
+migra; `wait-for-migrations.sh` sale 1 con la base vacía y 0 con la migrada; `migrate --noinput` sale 0 envuelto
+por el ENTRYPOINT y con `--entrypoint`. Lo corre `.github/workflows/smoke-imagen.yml`: en PRs que tocan
+`Dockerfile`/`scripts/**`/`railway.toml`/`pyproject.toml`/`uv.lock`, desde `ci-fork.yml` (job `imagen`) en el push
+que crea la rama y en dispatch `alcance=completo`, y a mano. No corre en cada push (build ~5 min; Railway no
+espera a la CI). Trivy (`security-scan.yml`) ya construía la imagen: se deja aparte a propósito.
+
+**Bug hallado por el smoke y corregido en `check-migrations.sh`:** sobre una base NUEVA recién migrada daba
+exit 3 («por delante del código») y `wait-for-migrations.sh` fallaba para siempre (worker/beat no arrancarían en
+una réplica nueva), por (1) migraciones squasheadas `cart.*` registradas como aplicadas y (2) la línea
+«N objects imported automatically» de `manage.py shell -c` contada como migración.
