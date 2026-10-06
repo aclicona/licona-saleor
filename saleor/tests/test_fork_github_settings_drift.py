@@ -325,3 +325,33 @@ def test_guion_y_workflows_existen():
         "vacío (hoy lo está: ningún workflow propio usa un secret distinto de "
         "GITHUB_TOKEN) — lo que no puede faltar es la línea misma."
     )
+
+
+# Ancla estable con la que el guion cita la regla del fork en UPGRADE_NOTES.md. Se cita
+# por texto y no por rango de líneas: el archivo es vivo y cada inserción por encima
+# desplazaría un rango literal sin que nada fallara (B-610).
+ANCLA_REGLA_FORK = "Lo que no está en el árbol no existe para la instancia N+1"
+UPGRADE_NOTES = RAIZ / "UPGRADE_NOTES.md"
+
+
+def test_guion_no_cita_rangos_de_linea_de_upgrade_notes():
+    """El guion no debe remitir a UPGRADE_NOTES.md por números de línea."""
+    contenido = GUION.read_text(encoding="utf-8")
+    citas = re.findall(r"UPGRADE_NOTES\.md[^\n]{0,20}l[ií]neas\s+\d+-\d+", contenido)
+    assert not citas, (
+        "check-github-settings.sh cita rangos de línea de UPGRADE_NOTES.md "
+        f"({citas}); cita el ancla «{ANCLA_REGLA_FORK}» en su lugar."
+    )
+
+
+def test_ancla_de_la_regla_del_fork_existe_y_el_guion_la_cita():
+    """Si el ancla desaparece de UPGRADE_NOTES.md o del guion, esto falla."""
+    notas = UPGRADE_NOTES.read_text(encoding="utf-8")
+    assert ANCLA_REGLA_FORK in notas, (
+        f"El ancla «{ANCLA_REGLA_FORK}» ya no está en UPGRADE_NOTES.md: el guion "
+        "remitiría a una regla que no existe. Restaura la regla o actualiza el "
+        "ancla en el guion y en este test."
+    )
+    assert ANCLA_REGLA_FORK in GUION.read_text(encoding="utf-8"), (
+        f"check-github-settings.sh ya no cita el ancla «{ANCLA_REGLA_FORK}»."
+    )
