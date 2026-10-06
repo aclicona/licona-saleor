@@ -102,6 +102,18 @@ jobs:
           echo "tag=$LATEST" >> $GITHUB_OUTPUT
           echo "Current minor: $CURRENT_MINOR | Latest patch: $LATEST"
 
+      # B-540: publica en el fork los tags de upstream que `stable/3.23` ya contiene (el fork
+      # se quedó en 3.22.48 con el código en 3.22.67). DRY-RUN por defecto: solo empuja si la
+      # variable de repo SYNC_PUBLISH_TAGS vale 'true'. No bloquea el sync si falla.
+      - name: Publicar tags de upstream ya absorbidos
+        continue-on-error: true
+        env:
+          PUSH_TAGS: ${{ vars.SYNC_PUBLISH_TAGS == 'true' && 'true' || 'false' }}
+          TARGET_REF: HEAD
+        run: |
+          CURRENT_MINOR=$(grep '^version' pyproject.toml | sed 's/version = "\([0-9]*\.[0-9]*\).*/\1/')
+          sh scripts/publish-upstream-tags.sh "$CURRENT_MINOR"
+
       - name: Check if PR already exists
         id: check_pr
         env:
