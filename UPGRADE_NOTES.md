@@ -1422,3 +1422,20 @@ lo agrega al índice. «CON CONFLICTOS» solo sale si queda algún conflicto en 
 `pyproject.toml` también conflictúa o `uv lock` falla (en ese caso `uv.lock` conserva su conflicto).
 Test: `sh scripts/tests/test_resolve_uv_lock.sh`. Verificar en el primer sync real que el diff del lock
 contra upstream sean solo las líneas de `python-dotenv`.
+
+## B-540 — publicar los tags de upstream que el fork ya contiene
+
+**Causa:** `sync-upstream.yml` hace `git fetch upstream --tags` solo dentro del runner y nunca los empuja; al
+mergear el PR llega el código pero no la etiqueta. Medido: el fork tiene `3.22.48` como último tag 3.22.x (el
+código está en 3.22.67) y `3.23.1` como último 3.23.x (`git describe` sobre `stable/3.23` ni siquiera encuentra tag).
+
+**Mecanismo (implementado, apagado):** `scripts/publish-upstream-tags.sh <minor>` publica los tags `X.Y.N` que
+(1) existen tras el fetch, (2) son ancestro de `stable/3.23` y (3) faltan en `origin`. El job `sync` lo invoca en
+un paso `continue-on-error`. **Dry-run por defecto**: solo empuja con la variable de repo `SYNC_PUBLISH_TAGS=true`.
+Test: `sh scripts/tests/test_publish_upstream_tags.sh`. Los tags se publican cuando el PR de sync ya está
+mergeado (merge commit; con squash el commit del tag no sería ancestro y se omitiría).
+
+**Decisiones para Andrés:** (a) activar `SYNC_PUBLISH_TAGS=true`; (b) backfill de los tags faltantes (3.22.49–67 y
+3.23.x): `git fetch upstream --tags && PUSH_TAGS=true sh scripts/publish-upstream-tags.sh 3.22 3.23`, desde una
+checkout con `TARGET_REF` apuntando a la rama que contenga el código; (c) confirmar que el `GITHUB_TOKEN` puede
+empujar tags (si hay reglas de protección de tags, hará falta excepción).
