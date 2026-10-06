@@ -132,6 +132,11 @@ jobs:
       # publica como SALIDAS lo que los pasos siguientes necesitan decidir. Antes
       # `CONFLICTED` era una variable de shell que moría con el proceso, y por eso todo
       # tenía que pasar en un único `run:` gigante.
+      # B-567: uv.lock conflictúa en todos los syncs (`*.lock -merge`); el merge lo regenera
+      # con `scripts/resolve-uv-lock.sh`, que invoca uv@<versión del Dockerfile> vía `uv tool run`.
+      - uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4 # v6.0.0
+        if: steps.check_pr.outputs.pr_number == ''
+
       - name: Merge del tag de upstream
         id: merge
         if: steps.check_pr.outputs.pr_number == ''
@@ -202,6 +207,11 @@ jobs:
             echo "::error::No se pudo restaurar .github/workflows/ desde $BASE_SHA."
             exit 1
           fi
+
+          # B-567: el conflicto de uv.lock es mecánico (se regenera), no necesita criterio
+          # humano. Solo queda en CONFLICTED lo que realmente lo necesite. Si el guion
+          # falla, uv.lock sigue en conflicto y el PR se marca CON CONFLICTOS como antes.
+          sh scripts/resolve-uv-lock.sh "$TAG" || echo "::warning::uv.lock no se pudo regenerar; queda en conflicto."
 
           CONFLICTED=$(git diff --name-only --diff-filter=U | sed 's/^/- `/;s/$/`/')
           git add -A

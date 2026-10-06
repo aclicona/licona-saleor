@@ -1411,3 +1411,14 @@ despliegue (`lock_branch`, `restrictions`, `required_pull_request_reviews`...: f
   `on.workflow_dispatch.inputs.alcance` con `completo` en `options`: es el comando que imprime
   `scripts/railway-seguro/ci_desplegable.py` (repo raíz). El nombre del archivo `ci-fork.yml` queda cubierto
   porque el módulo lo lee por ruta.
+
+## B-567 — el sync resuelve solo el conflicto mecánico de `uv.lock`
+
+`uv.lock` conflictúa en todos los syncs (`*.lock -merge` de upstream), así que todos los PR salían
+«⚠️ CON CONFLICTOS» y el aviso perdió su señal. `sync-upstream.yml` ahora ejecuta
+`scripts/resolve-uv-lock.sh <tag>` tras el merge: parte del `uv.lock` del tag, corre
+`uv tool run uv@<versión del Dockerfile> lock` (la versión se lee del `Dockerfile`, no es literal) y
+lo agrega al índice. «CON CONFLICTOS» solo sale si queda algún conflicto en otro archivo, o si
+`pyproject.toml` también conflictúa o `uv lock` falla (en ese caso `uv.lock` conserva su conflicto).
+Test: `sh scripts/tests/test_resolve_uv_lock.sh`. Verificar en el primer sync real que el diff del lock
+contra upstream sean solo las líneas de `python-dotenv`.
