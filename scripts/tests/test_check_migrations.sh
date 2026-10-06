@@ -5,6 +5,8 @@
 # (un guion sh) cuyo comportamiento se controla con variables:
 #   FAKE_PROBE: ok | operational | modulenotfound   (la sonda `manage.py shell`)
 #   FAKE_CHECK: 0 | silent1 | trace1 | code3        (`manage.py migrate --check`)
+#   FAKE_AHEAD: none | ahead | broken               (B-384: `manage.py shell` que busca
+#                                                    migraciones aplicadas que el código no conoce)
 # Uso: sh scripts/tests/test_check_migrations.sh [ruta/al/check-migrations.sh]
 # Sin argumento prueba el guion del repo. sh POSIX puro (dash).
 
@@ -23,6 +25,17 @@ cat >"$T/fakepython" <<'FAKE'
 #!/bin/sh
 case "$2" in
   shell)
+    case "$4" in
+      *applied_migrations*)
+        case "$FAKE_AHEAD" in
+          ahead) echo 'orders.0999_del_futuro'; echo 'product.0888_otra'; exit 0 ;;
+          broken)
+            echo 'Traceback (most recent call last):' >&2
+            echo 'RuntimeError: boom' >&2
+            exit 1 ;;
+        esac
+        exit 0 ;;
+    esac
     case "$FAKE_PROBE" in
       operational)
         echo 'Traceback (most recent call last):' >&2
@@ -54,9 +67,9 @@ FAKE
 chmod +x "$T/fakepython"
 
 FALLOS=0
-# caso <nombre> <probe> <check> <exit esperado> <texto esperado en la salida>
+# caso <nombre> <probe> <check> <exit esperado> <texto esperado en la salida> [ahead]
 caso() {
-  SALIDA=$(PYTHON="$T/fakepython" FAKE_PROBE="$2" FAKE_CHECK="$3" sh "$T/scripts/check-migrations.sh" 2>&1)
+  SALIDA=$(PYTHON="$T/fakepython" FAKE_PROBE="$2" FAKE_CHECK="$3" FAKE_AHEAD="${6:-none}" sh "$T/scripts/check-migrations.sh" 2>&1)
   COD=$?
   if [ "$COD" -eq "$4" ] && printf '%s\n' "$SALIDA" | grep -q -- "$5"; then
     echo "ok   - $1"
@@ -73,6 +86,9 @@ caso "3 sonda OperationalError + check 1 silencioso -> 2 (B-383)" operational si
 caso "4 sonda ModuleNotFoundError -> 2 ENTORNO"                modulenotfound silent1 2 "ENTORNO"
 caso "5 sonda OK + check 1 con Traceback -> 2 (respaldo)"      ok trace1 2 "NO SE PUDO RESPONDER"
 caso "6 sonda OK + check código 3 -> 2"                        ok code3 2 "NO SE PUDO RESPONDER"
+caso "7 al día + base POR DELANTE -> 3 y lista las migraciones (B-384)" ok 0 3 "orders.0999_del_futuro" ahead
+caso "8 al día + la consulta de adelanto se rompe -> 2 (no sé)"  ok 0 2 "NO SE PUDO RESPONDER" broken
+caso "9 pendientes + base por delante -> 1 (pendientes manda)"   ok silent1 1 "app.0001_pendiente" ahead
 
 if [ "$FALLOS" -ne 0 ]; then
   echo "$FALLOS caso(s) fallaron."

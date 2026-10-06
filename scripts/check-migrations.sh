@@ -14,6 +14,13 @@
 #       llevaría al llamador a correr `migrate` contra una base apagada, que es
 #       exactamente el error que este guion existe para evitar. Si distingues
 #       los tres códigos, distingues "migra" de "arregla la base".
+#   3 — La base está POR DELANTE del código: hay migraciones aplicadas en
+#       `django_migrations` que el código desplegado no conoce (B-384). Pasa
+#       tras un rollback de deploy o con un worktree más viejo que la base.
+#       `migrate --check` da 0 aquí y la app puede fallar igual. NO es accionable
+#       con `migrate`: la salida correcta es desplegar el código que las trae
+#       (o revertir la base a mano, decisión humana). Solo se evalúa cuando no
+#       hay pendientes; si hay pendientes manda el 1.
 #
 # ─── Por qué el guion habla ──────────────────────────────────────────────────
 # `manage.py migrate --check` es MUDO: 0 bytes en stdout tanto en verde como en
@@ -132,6 +139,31 @@ fi
 CODIGO=$?
 
 if [ "$CODIGO" -eq 0 ]; then
+  # Dirección inversa (B-384): migraciones aplicadas que el código no conoce.
+  # Solo lee: compara `django_migrations` contra las migraciones en disco.
+  "$PYTHON" manage.py shell -c "
+from django.db import connection
+from django.db.migrations.loader import MigrationLoader
+loader = MigrationLoader(connection, ignore_no_migrations=True)
+for app, name in sorted(set(loader.applied_migrations) - set(loader.disk_migrations)):
+    print(app + '.' + name)
+" >"$TMP/adelante.out" 2>"$TMP/adelante.err"
+  CODIGO_ADELANTE=$?
+  if [ "$CODIGO_ADELANTE" -ne 0 ]; then
+    no_se_pudo_responder "$TMP/adelante.err" "$CODIGO_ADELANTE"
+  fi
+  sin_ruido <"$TMP/adelante.out" >"$TMP/adelante.txt"
+  if [ -s "$TMP/adelante.txt" ]; then
+    TOTAL_ADELANTE=$(wc -l <"$TMP/adelante.txt" | tr -d ' ')
+    echo "$ETIQUETA La base está POR DELANTE del código: $TOTAL_ADELANTE migración(es) aplicada(s) que este código no conoce."
+    head -n 10 "$TMP/adelante.txt" | sed "s|^|$ETIQUETA   |"
+    if [ "$TOTAL_ADELANTE" -gt 10 ]; then
+      echo "$ETIQUETA   ... y $((TOTAL_ADELANTE - 10)) más (mostradas las 10 primeras)."
+    fi
+    echo "$ETIQUETA 'migrate' NO lo arregla. Causas típicas: rollback de deploy o un worktree"
+    echo "$ETIQUETA más viejo que la base. Despliega el código que trae esas migraciones."
+    exit 3
+  fi
   echo "$ETIQUETA La base está al día: no hay migraciones pendientes."
   exit 0
 fi

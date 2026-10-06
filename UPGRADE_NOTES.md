@@ -1387,3 +1387,12 @@ despliegue (`lock_branch`, `restrictions`, `required_pull_request_reviews`...: f
 - `saleor/tests/test_fork_branch_protection_drift.py` gana una matriz (`gh` falso + `jq`, se salta
   si no hay `jq`): conforme→0; cada campo del contrato roto→1; cuerpo vacío o `{}`→2; 404 con
   rama protegida→2, sin proteger→1.
+
+## B-384 — `check-migrations.sh` detecta la base POR DELANTE del código
+
+- `scripts/check-migrations.sh` gana el exit **3**: migraciones aplicadas en `django_migrations` que el código no
+  conoce (rollback de deploy, worktree más viejo que la base). Solo se evalúa si `migrate --check` dio 0; los
+  exit 0/1/2 existentes no cambian. Si la consulta de adelanto falla, exit 2 ("no sé").
+- `wait-for-migrations.sh` trata cualquier código distinto de 0 como "reintentar", así que con 3 espera y vence
+  con exit 1 al agotar `MIGRATIONS_WAIT_SECONDS`.
+- Prueba: `sh scripts/tests/test_check_migrations.sh` (casos 7-9, intérprete falso).
