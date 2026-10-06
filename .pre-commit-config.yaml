@@ -27,12 +27,17 @@ repos:
       - id: mypy
         args: [--cache-dir=/dev/null] # Disable cache to avoid issues with pre-commit
         language: system
+        entry: sh scripts/with-venv.sh mypy # B-388: resuelve el venv sin exigirlo en el PATH
         exclude: (tests|vendored)/
 
   - repo: https://github.com/fpgmaas/deptry.git
     rev: "0.23.1"
     hooks:
       - id: deptry
+        language: system
+        entry: sh scripts/with-venv.sh deptry . # B-388
+        pass_filenames: false
+        always_run: true
 
   - repo: https://github.com/returntocorp/semgrep
     rev: v1.153.0
@@ -65,7 +70,7 @@ repos:
       - id: migrations-check
         language: system
         name: Check for uncreated migrations.
-        entry: sh -c "./manage.py makemigrations --check --dry-run"
+        entry: sh scripts/with-venv.sh python manage.py makemigrations --check --dry-run
         files: "models\\.py$"
         stages: [pre-commit]
 
@@ -74,5 +79,5 @@ repos:
       - id: gql-schema-check
         language: system
         name: Check GraphQL schema is up to date.
-        entry: sh -c "./manage.py get_graphql_schema | diff saleor/graphql/schema.graphql -"
+        entry: sh -c "sh scripts/with-venv.sh python manage.py get_graphql_schema | diff saleor/graphql/schema.graphql -"
         stages: [pre-commit]

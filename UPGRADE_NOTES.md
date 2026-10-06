@@ -1387,3 +1387,11 @@ despliegue (`lock_branch`, `restrictions`, `required_pull_request_reviews`...: f
 - `saleor/tests/test_fork_branch_protection_drift.py` gana una matriz (`gh` falso + `jq`, se salta
   si no hay `jq`): conforme→0; cada campo del contrato roto→1; cuerpo vacío o `{}`→2; 404 con
   rama protegida→2, sin proteger→1.
+
+## B-388 — hooks de pre-commit resuelven el venv solos
+
+- Nuevo `scripts/with-venv.sh`: antepone `<raíz>/.venv/bin` (o el del clone principal, vía
+  `git rev-parse --git-common-dir`, en un worktree) al PATH y falla cerrado (exit 1) si no hay venv o no tiene
+  el comando. Lo usan los hooks `mypy`, `deptry`, `migrations-check` y `gql-schema-check` de
+  `.pre-commit-config.yaml` (divergencia local del fork: `deptry` pasa a `language: system`).
+- Prueba: `sh scripts/tests/test_with_venv.sh`.
