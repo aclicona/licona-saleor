@@ -1,0 +1,56 @@
+# Humo de la imagen Docker del fork contra un Postgres real (B-911). Archivo propio del
+# fork: NO existe en upstream.
+#
+# Qué comprueba (detalle en el encabezado de `scripts/smoke-imagen.sh`): que el ENTRYPOINT
+# no migra, que `wait-for-migrations.sh` sale 1 con la base vacía y 0 con la migrada, y que
+# `manage.py migrate --noinput` sale 0 envuelto por el ENTRYPOINT y con `--entrypoint`
+# sobrescrito. Son los supuestos sobre los que descansa el despliegue en Railway
+# (preDeployCommand de saleor-api; worker y beat esperando) y solo se ven con la imagen real.
+#
+# Cuándo corre, y por qué no en cada push: el build de la imagen cuesta ~5 min y ya se paga
+# en `security-scan.yml` (Trivy, push a stable/3.23). Este job NO se cuelga de ese: Trivy
+# escanea y no debe fallar por el smoke, y viceversa. En su lugar corre solo donde puede
+# cambiar el resultado:
+#   · `pull_request` que toque lo que entra en la imagen o los guiones que el smoke ejercita
+#     (Dockerfile, scripts/, railway.toml, pyproject.toml, uv.lock, este archivo): los
+#     `paths` evitan pagar el build en PRs que no pueden romper nada de esto.
+#   · `workflow_call`: lo invoca `ci-fork.yml` en `alcance=completo` y en el push que crea
+#     la rama (re-fork), junto a la suite completa, que es donde se paga lo caro a propósito.
+#   · `workflow_dispatch`: para lanzarlo a mano.
+# En un `push` normal a stable/* no corre: Railway despliega en paralelo sin esperar a la CI,
+# así que pagar 5 min por commit no gatearía nada.
+
+name: Smoke de la imagen
+
+permissions:
+  contents: read
+
+on:
+  pull_request:
+    branches: [ 'stable/*' ]
+    paths:
+      - 'Dockerfile'
+      - 'scripts/**'
+      - 'railway.toml'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/smoke-imagen.yml'
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Smoke de la imagen
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Construir la imagen
+        run: docker build -t licona-saleor:smoke .
+
+      # El guion levanta su propio Postgres en una red efímera y la borra al salir.
+      # Exit 1 = una comprobación falló; 2 = no se pudo preparar el entorno. Ambos son rojo.
+      - name: Comprobaciones contra Postgres real
+        run: sh scripts/smoke-imagen.sh licona-saleor:smoke

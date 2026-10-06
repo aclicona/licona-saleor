@@ -241,6 +241,17 @@ jobs:
           uv run pre-commit run --all --show-diff-on-failure
 
   # ---------------------------------------------------------------------------
+  # Humo de la imagen Docker (B-911): build real + Postgres de servicio. Reutiliza
+  # `smoke-imagen.yml` (que tambien corre solo en PRs que tocan Dockerfile/scripts/...).
+  # Misma condicion que `suite` pero SIN el corte de `push` normal: solo en el push que
+  # CREA la rama (re-fork) y en dispatch `completo`; un push cualquiera no paga el build.
+  # ---------------------------------------------------------------------------
+  imagen:
+    name: Smoke de la imagen
+    if: ${{ (github.event_name == 'push' && github.event.created) || (github.event_name == 'workflow_dispatch' && inputs.alcance != 'rapido') }}
+    uses: ./.github/workflows/smoke-imagen.yml
+
+  # ---------------------------------------------------------------------------
   # Suite completa. Sin cobertura: el fork no la sube a ningun servicio externo (no
   # tiene el secreto que haria falta) y quitarla ahorra minutos de runner.
   # Misma condicion que `linters`, incluido el corte en `push`: 60 min de runner por
