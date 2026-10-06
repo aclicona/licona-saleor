@@ -1522,3 +1522,24 @@ Rama por defecto del fork: `stable/3.23`; no existe rama `main` en `origin`.
 
 Resumen: borrar 15 con seguridad razonable, decidir 4 (`tests-and-linters`, `check-migration-tasks`,
 `graphql-inspector`, `test-semgrep-rules`). Pendiente de confirmar con historial de runs antes de borrar.
+
+### B-378 — resolución (2026-10-06): 15 workflows heredados borrados
+
+Andrés aprobó borrar los que el inventario de arriba marca «Borrar». Borrados del árbol (nunca
+`gh workflow disable`): `publish-main.yml`, `publish-containers.yml`, `create-tag-with-release-pr.yml`,
+`publish-load-test.yml`, `test-env-deploy.yml`, `test-env-cleanup.yml`, `bump-dependencies.yml`, `e2e.yml`,
+`check-licenses.yaml`, `changelog-check.yml`, `migrations-perf-test-check.yml`, `migrations-perf-test.yml`,
+`github-releases-to-discord.yml`, `help-wanted-issues-to-discord.yml`, `test-migrations-compatibility.yml`
+(esta última era «Borrar o re-apuntar»: nunca disparaba, sus bases `3.*`/`main` no existen aquí).
+
+**Se conservan** los 4 que el inventario deja «a decidir» (`tests-and-linters.yml`, `check-migration-tasks.yml`,
+`graphql-inspector.yml`, `test-semgrep-rules.yml`) y los propios (`ci-fork.yml`, `security-scan.yml`,
+`sync-upstream.yml`, más `smoke-imagen.yml`, B-911). `tests-and-linters.yml` sigue corriendo en cada PR y solapa con
+`ci-fork.yml`: pendiente de la decisión de Andrés.
+
+**Coste de sync cero, comprobado:** `sync-upstream.yml` hace `rm -rf .github/workflows` y
+`git checkout "$BASE_SHA" -- .github/workflows/` tras el merge del tag, así que restaura el directorio desde el
+árbol del fork (no desde upstream) y los borrados persisten (mismo mecanismo que `test-env-cleanup-cron.yml`).
+Lo que sí hay que repetir a mano es el **re-fork a una minor nueva** (copia el árbol de upstream): volver a borrar
+estos 15 (o partir de `stable/3.23`). Ningún workflow restante referencia uno borrado (`ci-fork.yml` solo llama al
+nuevo `smoke-imagen.yml`).

@@ -711,8 +711,9 @@ if [ "$PERMISO" != "$PERMISO_ESPERADO" ]; then
   echo "$ETIQUETA   hay ningún 403 de 'upload-artifact' que citar. La consecuencia real es más"
   echo "$ETIQUETA   estrecha y es de seguridad: en '$PERMISO', los workflows DE UPSTREAM que NO"
   echo "$ETIQUETA   llevan bloque 'permissions:' y que aún disparan reciben un token de ESCRITURA"
-  echo "$ETIQUETA   que nadie les concedió explícitamente. Hoy son 'bump-dependencies.yml' (cron"
-  echo "$ETIQUETA   mensual, abre PR) y 'create-tag-with-release-pr.yml' (crea tag y release)."
+  echo "$ETIQUETA   que nadie les concedió explícitamente. Desde B-378 no queda ninguno (se"
+  echo "$ETIQUETA   borraron 'bump-dependencies.yml' y 'create-tag-with-release-pr.yml', los dos"
+  echo "$ETIQUETA   sin bloque), pero la deriva sigue siendo real para cualquiera que se añada."
   consejo_permisos
 fi
 
