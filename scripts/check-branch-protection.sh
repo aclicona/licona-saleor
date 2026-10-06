@@ -78,9 +78,16 @@
 #   · required_conversation_resolution — solo aplica a pull requests, y esta
 #     rama no se despliega por PR.
 #   · url — metadato de la API, no es configuración.
-# Tampoco se miran los repository RULESETS (otra API): una regla ahí también
-# podría bloquear el push. Un exit 0 significa "estos once puntos coinciden",
-# NO "no existe ningún otro mecanismo que bloquee el despliegue".
+# Además de los once puntos de la protección clásica, se consultan los
+# repository RULESETS vigentes sobre la rama (`GET /repos/<repo>/rules/branches/<rama>`,
+# B-769): un ruleset con una regla de tipo `pull_request`, `non_fast_forward`,
+# `required_linear_history`, `required_signatures` o `update` bloquea el push
+# directo de despliegue igual que la protección clásica, y la API clásica no lo
+# ve. Cualquiera de esas cinco aplicable a la rama es deriva (exit 1). Si la API
+# de rulesets no responde, "no sé" (exit 2). Las demás reglas de ruleset
+# (deletion, creation, required_status_checks, etc.) quedan fuera del contrato.
+# Un exit 0 significa "estos once puntos coinciden y ningún ruleset bloquea el
+# push", NO "no existe ningún otro mecanismo que bloquee el despliegue".
 #
 # ─── Por qué existe ──────────────────────────────────────────────────────────
 # La branch protection de GitHub NO viaja con el código: vive solo en la
@@ -427,6 +434,23 @@ if [ "$ENFORCE_ADMINS$ALLOW_FORCE_PUSHES$ALLOW_DELETIONS$LOCK_BRANCH$BLOCK_CREAT
   exit 2
 fi
 
+# ─── 2.c Repository rulesets aplicables a la rama (B-769) ───────────────────
+# Endpoint de solo lectura: devuelve las reglas EFECTIVAS sobre la rama, de
+# todos los rulesets activos que la apuntan (no requiere admin). Se listan solo
+# las cinco que bloquean el push directo de despliegue. Una línea por regla:
+# "<tipo> (ruleset <id>)". Cero líneas = ningún ruleset bloquea. Si la llamada
+# falla es "no sé" (2), nunca "sin reglas": se decide al final para que una
+# deriva de la protección clásica (1) no quede tapada por un fallo de esta.
+RULESETS_ILEGIBLE=""
+gh api "repos/$REPO/rules/branches/$RAMA_ESC" \
+  --jq '.[] | select(.type | IN("pull_request","non_fast_forward","required_linear_history","required_signatures","update")) | "\(.type) (ruleset \(.ruleset_id))"' \
+  >"$TMP/rules.out" 2>"$TMP/rules.err"
+CODIGO_RULES=$?
+if [ "$CODIGO_RULES" -ne 0 ]; then
+  RULESETS_ILEGIBLE=$(tail -n 1 "$TMP/rules.err")
+  RULESETS_ILEGIBLE="${RULESETS_ILEGIBLE:-(sin mensaje en stderr)}"
+fi
+
 # 'tostring' sobre un campo ausente en el JSON produce el literal 'null', que
 # no es un booleano válido para el contrato: se traduce a algo legible para
 # el humano y se trata como NO coincidente con nada esperado (ni true ni
@@ -569,11 +593,32 @@ if [ "$RESTRICCIONES" != "ausente" ]; then
   echo "$ETIQUETA   desplegador está en la lista, el contrato debe cambiarse a propósito."
 fi
 
+if [ -z "$RULESETS_ILEGIBLE" ] && [ -s "$TMP/rules.out" ]; then
+  DERIVAS="${DERIVAS}x"
+  echo "$ETIQUETA DERIVA en repository rulesets: hay reglas que bloquean el push directo a '$RAMA':"
+  while IFS= read -r REGLA; do
+    echo "$ETIQUETA   · $REGLA"
+  done <"$TMP/rules.out"
+  echo "$ETIQUETA   Consecuencia GRAVE: un ruleset con pull_request, non_fast_forward,"
+  echo "$ETIQUETA   required_linear_history, required_signatures o update rechaza el push de"
+  echo "$ETIQUETA   despliegue (sin PR, con merge commits, sin firma o con force-push de rollback)."
+  echo "$ETIQUETA   Se corrige en Settings > Rules > Rulesets del repo (no con el PUT de abajo):"
+  echo "$ETIQUETA   quita la regla o añade al desplegador como 'bypass actor'."
+fi
+
 if [ -n "$DERIVAS" ]; then
   echo "$ETIQUETA La branch protection de '$RAMA' en '$REPO' NO coincide con lo esperado en al"
   echo "$ETIQUETA menos uno de los once puntos que este guion verifica."
   consejo_arreglar
   exit 1
+fi
+
+if [ -n "$RULESETS_ILEGIBLE" ]; then
+  echo "$ETIQUETA NO SE PUDO RESPONDER: la protección clásica coincide, pero 'gh api' falló"
+  echo "$ETIQUETA consultando los rulesets de '$RAMA' (código $CODIGO_RULES)."
+  echo "$ETIQUETA Línea reveladora: $RULESETS_ILEGIBLE"
+  echo "$ETIQUETA No sé si un ruleset bloquea el push de despliegue: no doy un verde a medias."
+  exit 2
 fi
 
 # El verde dice EXACTAMENTE qué comprobó, y dice también qué no.
@@ -590,6 +635,8 @@ echo "$ETIQUETA   required_linear_history.enabled = false"
 echo "$ETIQUETA   required_signatures.enabled     = false"
 echo "$ETIQUETA   required_pull_request_reviews   = ausente"
 echo "$ETIQUETA   restrictions                    = ausente (no se validan listas de actores)"
+echo "$ETIQUETA Ningún repository ruleset aplicable a la rama trae pull_request, non_fast_forward,"
+echo "$ETIQUETA required_linear_history, required_signatures ni update."
 echo "$ETIQUETA ALCANCE: fuera del contrato quedan allow_fork_syncing, required_conversation_resolution"
-echo "$ETIQUETA (solo PRs) y los repository rulesets, que este guion no consulta."
+echo "$ETIQUETA (solo PRs) y las demás reglas de ruleset (deletion, creation, status checks...)."
 exit 0

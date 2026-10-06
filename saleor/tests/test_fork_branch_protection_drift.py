@@ -156,6 +156,9 @@ _GH_FALSO = """#!/bin/sh
 EP=$2; shift 2
 JQ=""; while [ $# -gt 0 ]; do [ "$1" = "--jq" ] && JQ=$2; shift; done
 case "$EP" in
+  */rules/branches/*)
+    [ "$CASO" = rules_error ] && { echo "gh: Internal Server Error (HTTP 500)" >&2; exit 1; }
+    if [ -f "$FIX/rules.json" ]; then jq -r "$JQ" "$FIX/rules.json"; else echo '[]' | jq -r "$JQ"; fi ;;
   */protection)
     [ "$CASO" = 404 ] && { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
     [ -f "$FIX/protection.json" ] || exit 0
@@ -179,7 +182,7 @@ _PROTECCION_CONFORME = {
 }
 
 
-def _ejecutar_guion(tmp_path, cuerpo, caso="", protegida="true"):
+def _ejecutar_guion(tmp_path, cuerpo, caso="", protegida="true", reglas=None):
     if shutil.which("jq") is None or shutil.which("sh") is None:
         pytest.skip("hace falta `jq` y `sh` para simular el `--jq` de gh")
     gh = tmp_path / "bin" / "gh"
@@ -188,6 +191,8 @@ def _ejecutar_guion(tmp_path, cuerpo, caso="", protegida="true"):
     gh.chmod(0o755)
     if cuerpo is not None:
         (tmp_path / "protection.json").write_text(cuerpo, encoding="utf-8")
+    if reglas is not None:
+        (tmp_path / "rules.json").write_text(json.dumps(reglas), encoding="utf-8")
     entorno = {
         **os.environ,
         "PATH": f"{gh.parent}{os.pathsep}{os.environ['PATH']}",
@@ -241,6 +246,38 @@ def test_guion_404_con_rama_protegida_es_no_se(tmp_path):
 
 def test_guion_404_con_rama_sin_proteger_es_deriva(tmp_path):
     assert _ejecutar_guion(tmp_path, None, caso="404", protegida="false") == 1
+
+
+# ─── Repository rulesets (B-769) ───────────────────────────────────────────────
+# `GET /repos/<repo>/rules/branches/<rama>` devuelve las reglas efectivas. Las
+# cinco que bloquean el push directo de despliegue son deriva; el resto no.
+
+
+@pytest.mark.parametrize(
+    "tipo",
+    ["pull_request", "non_fast_forward", "required_linear_history", "required_signatures", "update"],
+)
+def test_guion_ruleset_que_bloquea_el_push_es_deriva(tmp_path, tipo):
+    reglas = [{"type": tipo, "ruleset_source_type": "Repository", "ruleset_id": 42}]
+    assert _ejecutar_guion(tmp_path, _con(), reglas=reglas) == 1
+
+
+def test_guion_ruleset_con_reglas_ajenas_al_push_es_conforme(tmp_path):
+    reglas = [{"type": "deletion", "ruleset_id": 7}, {"type": "creation", "ruleset_id": 7}]
+    assert _ejecutar_guion(tmp_path, _con(), reglas=reglas) == 0
+
+
+def test_guion_sin_rulesets_es_conforme(tmp_path):
+    assert _ejecutar_guion(tmp_path, _con(), reglas=[]) == 0
+
+
+def test_guion_api_de_rulesets_caida_es_no_se(tmp_path):
+    assert _ejecutar_guion(tmp_path, _con(), caso="rules_error") == 2
+
+
+def test_guion_api_de_rulesets_caida_no_tapa_una_deriva_clasica(tmp_path):
+    cuerpo = _con(lock_branch={"enabled": True})
+    assert _ejecutar_guion(tmp_path, cuerpo, caso="rules_error") == 1
 
 
 # Cadena literal de la que depende el guard del repo raíz `ecommerce`

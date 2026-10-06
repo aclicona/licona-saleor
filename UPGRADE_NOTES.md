@@ -1406,8 +1406,14 @@ despliegue (`lock_branch`, `restrictions`, `required_pull_request_reviews`...: f
   merge commits propios del fork (`chore(3.23): merge del tag upstream`) y ningún commit firmado.
   Con cualquiera de los dos en `true` el siguiente sync o push del worker se rechaza.
 - **Fuera del contrato, por escrito en la cabecera del guion:** `allow_fork_syncing`,
-  `required_conversation_resolution` (solo PRs) y `url`. Tampoco se consultan los repository
-  rulesets (API distinta).
+  `required_conversation_resolution` (solo PRs) y `url`. ~~Tampoco se consultan los repository
+  rulesets~~ — desde B-769 sí (ver abajo).
+- **Rulesets (B-769):** el guion consulta además `GET /repos/<repo>/rules/branches/<rama>` y
+  marca deriva (exit 1) si hay una regla `pull_request`, `non_fast_forward`,
+  `required_linear_history`, `required_signatures` o `update` aplicable a la rama; si esa API no
+  responde, exit 2 (y no tapa una deriva clásica, que sigue siendo 1). Medido el 2026-10-06:
+  `gh api repos/aclicona/licona-saleor/rules/branches/stable/3.23` devuelve `[]` y `.../rulesets`
+  devuelve `[]` (sin rulesets); el guion sale 0.
 - **Se conserva el endurecimiento:** 404 sin admin con `.protected=true` sigue siendo exit 2;
   salida vacía, truncada o `{}` (ninguno de los campos obligatorios) es exit 2, no derivas
   fabricadas. La ausencia de `restrictions`/`required_pull_request_reviews` es estado legítimo;
