@@ -8,6 +8,30 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-1019 — timeout global por test con `pytest-timeout` (2026-10-07)
+
+`pyproject.toml`: `pytest-timeout>=2.3.1,<3` en el grupo `dev` (solo test; el runtime no cambia) y `uv.lock` con la entrada
+`pytest-timeout 2.4.0` (diff acotado a ese paquete). `setup.cfg [tool:pytest]`: `timeout = 600` y `timeout_method = signal`.
+Un test (incluidos sus fixtures) que pase de 600 s falla con `Failed: Timeout (>600.0s)` y la linea exacta donde estaba parado,
+en vez de dejar la suite de 17k colgada hasta el `timeout-minutes` del job.
+
+**Por que 600 s:** el test mas lento medido en los JUnit de CI (`resultados-pytest`) es de ~140 s (run 37684326393) y ~207 s
+(run 37671233116): siempre el primer test de un worker de xdist (arranque en frio), p. ej. `test_address_form_for_country[*]`
+y `test_asgiref`. 300 s dejaba solo ~1,4x de margen sobre 207 s; 600 s da ~3x. Un test de verdad colgado cuesta 10 min, muy por
+debajo del limite del job (30 min).
+
+**Por que `signal` y no `thread`:** medido con xdist (`-n2`, timeout bajo forzado): `thread` hace `os._exit` del worker;
+xdist lo reporta como `worker crashed` y lo reemplaza, repitiendo el test hasta `maximum crashed workers` (9 fallos por un solo
+test) y la traza de hilos se pierde (el stderr del worker no llega). `signal` falla solo ese test, con traceback, y el worker
+sigue vivo. Limite conocido: `signal` no interrumpe una llamada C que ignore senales; para eso el CI ya pasa
+`-o faulthandler_timeout=300` (vuelca los hilos a los 300 s). Un test que necesite mas:
+`@pytest.mark.timeout(1200)`.
+
+**Verificacion:** test temporal con `time.sleep(6)` y `-o timeout=3`: falla en ~3 s con traza, con `-n0` y `-n2`; retirado,
+no se commitea.
+
+---
+
 ## B-1015 — un test que llega al broker real falla en segundos, no se cuelga (2026-10-07)
 
 `saleor/tests/settings.py`: `CELERY_BROKER_URL = "redis://127.0.0.1:1/1"` (puerto cerrado, rechazo inmediato; tambien se
