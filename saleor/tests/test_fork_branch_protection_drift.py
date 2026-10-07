@@ -255,7 +255,13 @@ def test_guion_404_con_rama_sin_proteger_es_deriva(tmp_path):
 
 @pytest.mark.parametrize(
     "tipo",
-    ["pull_request", "non_fast_forward", "required_linear_history", "required_signatures", "update"],
+    [
+        "pull_request",
+        "non_fast_forward",
+        "required_linear_history",
+        "required_signatures",
+        "update",
+    ],
 )
 def test_guion_ruleset_que_bloquea_el_push_es_deriva(tmp_path, tipo):
     reglas = [{"type": tipo, "ruleset_source_type": "Repository", "ruleset_id": 42}]
@@ -263,7 +269,10 @@ def test_guion_ruleset_que_bloquea_el_push_es_deriva(tmp_path, tipo):
 
 
 def test_guion_ruleset_con_reglas_ajenas_al_push_es_conforme(tmp_path):
-    reglas = [{"type": "deletion", "ruleset_id": 7}, {"type": "creation", "ruleset_id": 7}]
+    reglas = [
+        {"type": "deletion", "ruleset_id": 7},
+        {"type": "creation", "ruleset_id": 7},
+    ]
     assert _ejecutar_guion(tmp_path, _con(), reglas=reglas) == 0
 
 

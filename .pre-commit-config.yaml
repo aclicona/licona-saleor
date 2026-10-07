@@ -72,6 +72,10 @@ repos:
         name: Check for uncreated migrations.
         entry: sh scripts/with-venv.sh python manage.py makemigrations --check --dry-run
         files: "models\\.py$"
+        # B-1009: makemigrations toma ETIQUETAS DE APP, no rutas; con filenames (CI corre
+        # --all, o un commit que toque models.py) salia exit 2 "No installed app with label
+        # 'saleor/x/models.py'". El check es global: no se le pasan archivos.
+        pass_filenames: false
         stages: [pre-commit]
 
   - repo: local
