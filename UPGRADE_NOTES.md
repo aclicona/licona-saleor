@@ -8,6 +8,27 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## Beat con DatabaseScheduler como latido en BD (2026-10-06, reporte B-966)
+
+**Porqué:** el beat de producción usaba `PersistentScheduler` (shelve en disco), que no deja huella
+en la BD: no había forma de vigilar que beat sigue vivo. Decisión de Andrés (opción A).
+
+**Cambio:** `railway.saleor-beat.json` -> startCommand
+`sh scripts/railway-entrypoint.sh celery -A saleor beat --scheduler saleor.schedulers.schedulers.DatabaseScheduler`
+(`scripts/tests/test_railway_config.sh` actualizado). No se toca el default de `CELERY_BEAT_SCHEDULER`
+en `saleor/settings.py` (lo fija `saleor/schedulers/tests/test_beat_scheduler_setting.py`).
+
+**Impacto:** al arrancar, beat sincroniza el `CELERY_BEAT_SCHEDULE` a las tablas de `django_celery_beat`
+(`django_celery_beat_periodictask`, etc.). El latido es `last_run_at` de la tarea
+`release-funds-for-abandoned-checkouts` (cada 10 min); `checkout-automatic-completion` es «dirty» y solo
+dispara con candidatos, no sirve de latido.
+
+**Requiere panel de Railway:** aplicar el mismo startCommand en `saleor-beat` (Settings -> Deploy ->
+Start Command) en la ventana de despliegue; el panel aún NO lo tiene. Cualquier cambio debe replicarse
+entre panel y archivo.
+
+---
+
 ## Config-as-code por servicio de Railway (2026-10-06, reporte B-876)
 
 **Qué hay:** `railway.saleor-api.json`, `railway.saleor-worker.json` y `railway.saleor-beat.json`

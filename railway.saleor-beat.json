@@ -8,7 +8,7 @@
     }
   },
   "deploy": {
-    "startCommand": "sh scripts/railway-entrypoint.sh celery -A saleor beat",
+    "startCommand": "sh scripts/railway-entrypoint.sh celery -A saleor beat --scheduler saleor.schedulers.schedulers.DatabaseScheduler",
     "preDeployCommand": [
       "sh scripts/wait-for-migrations.sh"
     ],

@@ -42,7 +42,9 @@ for s in worker beat; do
   verifica "$s: ningún comando de deploy contiene 'migrate --noinput'" "$(! grep -q 'migrate --noinput' "$RAIZ/$f"; echo $?)"
 done
 verifica "worker: startCommand = panel" "$(igual railway.saleor-worker.json deploy.startCommand "\"sh -c 'celery -A saleor worker -E --concurrency=4'\"")"
-verifica "beat: startCommand = panel" "$(igual railway.saleor-beat.json deploy.startCommand '"sh scripts/railway-entrypoint.sh celery -A saleor beat"')"
+# B-966: beat usa DatabaseScheduler (latido en BD). OJO: el panel aún NO tiene este valor; se aplica
+# en la ventana de despliegue (parte 2). Hasta entonces el panel sigue sin --scheduler.
+verifica "beat: startCommand = archivo (DatabaseScheduler, B-966)" "$(igual railway.saleor-beat.json deploy.startCommand '"sh scripts/railway-entrypoint.sh celery -A saleor beat --scheduler saleor.schedulers.schedulers.DatabaseScheduler"')"
 
 # El startCommand sustituye al ENTRYPOINT: el entrypoint solo corre si se invoca a mano.
 verifica "beat: invoca railway-entrypoint.sh explícitamente" "$(campo railway.saleor-beat.json deploy.startCommand | grep -q 'scripts/railway-entrypoint.sh'; echo $?)"
