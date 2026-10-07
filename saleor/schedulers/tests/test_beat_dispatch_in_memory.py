@@ -41,7 +41,10 @@ def queue_name():
 
 
 @pytest.fixture
-def beat_app(tmp_path):
+def beat_app(tmp_path, monkeypatch):
+    # Celery gives `CELERY_BROKER_URL` precedence over the `broker=` argument; without
+    # this a dev/CI environment that defines it would send the canary to a real broker.
+    monkeypatch.delenv("CELERY_BROKER_URL", raising=False)
     app = Celery("beat_canary", broker="memory://", set_as_current=False)
     app.conf.beat_schedule_filename = str(tmp_path / "beat-schedule")
     yield app

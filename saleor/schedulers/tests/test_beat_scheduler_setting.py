@@ -60,7 +60,13 @@ def test_tick_sends_due_entry_even_if_head_of_heap_is_not_due():
     scheduler.data = {"blocked": blocked, "due": due}
 
     # when
-    with mock.patch.object(_Scheduler, "apply_entry") as apply_entry:
+    # B-1008: `tick` evaluates `self.producer` *before* calling `apply_entry`. Unpatched,
+    # that opens a real connection to the broker configured for `app`; with no reachable
+    # broker (CI) kombu retries forever and the suite hung at 99 %.
+    with (
+        mock.patch.object(_Scheduler, "producer", new=mock.Mock()),
+        mock.patch.object(_Scheduler, "apply_entry") as apply_entry,
+    ):
         scheduler.tick()
 
     # then

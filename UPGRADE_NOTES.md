@@ -1599,10 +1599,17 @@ colgado hasta el timeout (4 runs seguidos: 37616702066, 37626155687, 37642669252
 pytest. Postgres solo mostraba el `DROP DATABASE` del teardown: los tests terminaban, no salía el proceso xdist.
 El último verde fue el 2026-09-30 sobre `70056796eb`; en local la suite sale limpia.
 
-- **Sospechoso corregido:** `saleor/schedulers/tests/test_beat_dispatch_in_memory.py` (nuevo desde `95dc50b7`) creaba un
+- **Causa raíz confirmada (run 37663329473, stacks de faulthandler):** no era el proceso al salir sino un test
+  en curso, colgado al 99 %: `test_beat_scheduler_setting.py::test_tick_sends_due_entry_even_if_head_of_heap_is_not_due`
+  (B-700, `fe9cb87cf4`). `BaseScheduler.tick` evalúa `self.producer` antes de llamar a `apply_entry`, y el test solo
+  parcheaba `apply_entry`: `producer` abría una conexión real al broker de `app` y, sin broker alcanzable (CI),
+  `kombu.ensure_connection` reintenta para siempre (`celery/beat.py:480` -> `kombu/connection.py:459`). Los 3 `-n`
+  workers restantes esperaban en `execnet`. Fix: el test parchea también `producer`. En local lo escondía un
+  broker alcanzable.
+- **Sospechoso descartado como causa, endurecido igualmente:** `saleor/schedulers/tests/test_beat_dispatch_in_memory.py` (nuevo desde `95dc50b7`) creaba un
   `Celery(broker="memory://")` que nunca cerraba, y contaba mensajes en la cola `celery` por defecto, compartida por
   todo el proceso (el transporte `memory://` guarda su estado a nivel de clase): fallaba en local con `assert 83 == 1`.
-  Ahora la app es una fixture con `app.close()` en el teardown y la cola es única por test (`options.queue`). Sigue
+  La fixture además quita `CELERY_BROKER_URL` del entorno (Celery lo prefiere al argumento `broker=`). Ahora la app es una fixture con `app.close()` en el teardown y la cola es única por test (`options.queue`). Sigue
   probando lo mismo: beat real, `apply_entry` real y broker en memoria, 1 mensaje publicado y `blocked` no.
 - **Diagnóstico en CI** (por si no era la causa): `-rA` (resultado por test), `-o faulthandler_timeout=300` y, en
   `conftest.py`, un `pytest_sessionfinish` que con `B1008_EXIT_WATCHDOG=1` (solo lo pone `ci-fork.yml`) arma
