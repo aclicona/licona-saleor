@@ -69,11 +69,12 @@ env:
 # sigue teniendo la deriva mientras nadie la arregle.
 #
 # Excepcion: el push que CREA la rama (`github.event.created`) tiene grupo propio,
-# sufijo `-creacion`. Ese run es el unico en `push` que corre la suite completa (ver
-# abajo) y dura ~60 min; con el grupo comun, un segundo push poco despues de crear la
-# rama lo cancelaria y la verificacion completa del re-fork se perderia en silencio.
-# Con grupo aparte, el run de creacion termina y los pushes posteriores se cancelan
-# solo entre si. (B-666)
+# sufijo `-creacion`. Ese run es el unico en `push` que corre ademas linters y smoke
+# de la imagen; con el grupo comun, un segundo push poco despues de crear la rama lo
+# cancelaria y la verificacion completa del re-fork se perderia en silencio. Con grupo
+# aparte, el run de creacion termina y los pushes posteriores se cancelan solo entre
+# si. (B-666) Desde B-1005 la suite completa corre en TODO push a `stable/*` (ver job
+# `suite`); la cancelacion entre pushes es aceptable: el guard exige solo el HEAD.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}${{ github.event.created && '-creacion' || '' }}
   cancel-in-progress: true
@@ -254,17 +255,17 @@ jobs:
   # ---------------------------------------------------------------------------
   # Suite completa. Sin cobertura: el fork no la sube a ningun servicio externo (no
   # tiene el secreto que haria falta) y quitarla ahorra minutos de runner.
-  # Misma condicion que `linters`, incluido el corte en `push`: 60 min de runner por
-  # commit no gatearian nada, porque Railway ya esta desplegando en paralelo sin
-  # esperar el resultado. En `push` la unica pregunta que se paga es la de la puerta,
-  # salvo en el push que crea la rama (B-666), donde si se paga la suite completa.
+  # B-1005: la suite corre en cada push a stable/* porque ci_desplegable.py exige el
+  # HEAD exacto; B-666 (ahorro de minutos) queda superada: el repo es publico.
+  # (Antes solo corria en el push que crea la rama, en PR y en dispatch `completo`;
+  # `linters` conserva ese corte.) El dispatch `rapido` sigue sin correrla.
   # ---------------------------------------------------------------------------
   suite:
     name: Suite completa (17k tests)
     runs-on: ubuntu-latest
     container: python:3.12
     timeout-minutes: 60
-    if: ${{ (github.event_name != 'push' || github.event.created) && (github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido' }}
 
     services:
       postgres:

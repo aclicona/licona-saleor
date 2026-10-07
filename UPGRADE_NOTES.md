@@ -8,6 +8,20 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-1005 — la suite completa corre en cada push a `stable/*` (2026-10-07)
+
+`.github/workflows/ci-fork.yml`: el job `suite` («Suite completa (17k tests)», nombre sin cambios) pasa de
+`(push solo si created) && (dispatch solo si alcance != rapido)` a solo `dispatch con alcance != rapido`, es
+decir corre en PR, dispatch `completo` y **todo push a `stable/*`**. `linters` e `imagen` conservan su corte
+(solo push que crea la rama). El bloque `concurrency` ya existía y no se tocó.
+
+**Por qué:** el guard `scripts/railway-seguro/ci_desplegable.py` (repo raíz) exige ese job en success sobre el SHA
+exacto del HEAD de `stable/3.23`; con el corte de B-666 cualquier push normal dejaba el HEAD sin run y obligaba
+a lanzar un dispatch a mano. B-666 (ahorro de minutos con repo privado) queda superada: el repo es público
+(runners estándar gratis). Un commit `[skip ci]` en `stable/*` sigue sin run y el guard lo rechaza (correcto).
+
+---
+
 ## Deriva JSON vs panel de Railway: builder de beat (2026-10-06, reporte B-978)
 
 **Qué divergía:** `railway.saleor-beat.json` decía `builder: DOCKERFILE` (+ `dockerfilePath`), pero el
