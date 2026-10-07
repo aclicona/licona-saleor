@@ -1591,3 +1591,23 @@ espera a la CI). Trivy (`security-scan.yml`) ya construía la imagen: se deja ap
 exit 3 («por delante del código») y `wait-for-migrations.sh` fallaba para siempre (worker/beat no arrancarían en
 una réplica nueva), por (1) migraciones squasheadas `cart.*` registradas como aplicadas y (2) la línea
 «N objects imported automatically» de `manage.py shell -c` contada como migración.
+
+## B-1008 — la suite de CI se colgaba al 99 % (2026-10-07)
+
+Síntoma: el job «Suite completa (17k tests)» de `ci-fork.yml` llegaba al 99 % en ~12 min con 0 fallos y se quedaba
+colgado hasta el timeout (4 runs seguidos: 37616702066, 37626155687, 37642669252, 37651066346), sin resumen de
+pytest. Postgres solo mostraba el `DROP DATABASE` del teardown: los tests terminaban, no salía el proceso xdist.
+El último verde fue el 2026-09-30 sobre `70056796eb`; en local la suite sale limpia.
+
+- **Sospechoso corregido:** `saleor/schedulers/tests/test_beat_dispatch_in_memory.py` (nuevo desde `95dc50b7`) creaba un
+  `Celery(broker="memory://")` que nunca cerraba, y contaba mensajes en la cola `celery` por defecto, compartida por
+  todo el proceso (el transporte `memory://` guarda su estado a nivel de clase): fallaba en local con `assert 83 == 1`.
+  Ahora la app es una fixture con `app.close()` en el teardown y la cola es única por test (`options.queue`). Sigue
+  probando lo mismo: beat real, `apply_entry` real y broker en memoria, 1 mensaje publicado y `blocked` no.
+- **Diagnóstico en CI** (por si no era la causa): `-rA` (resultado por test), `-o faulthandler_timeout=300` y, en
+  `conftest.py`, un `pytest_sessionfinish` que con `B1008_EXIT_WATCHDOG=1` (solo lo pone `ci-fork.yml`) arma
+  `faulthandler.dump_traceback_later(120, repeat=True)`: si el intérprete no sale tras la sesión, vuelca los stacks de
+  todos los hilos cada 2 min (`faulthandler_timeout` solo cubre tests en curso, no la salida). `timeout-minutes` del job
+  suite: 60 -> 30.
+- Al re-forkear a una minor nueva: el `conftest.py` y el workflow se copian de upstream; reaplicar el hook si se quiere
+  conservar el diagnóstico (es inocuo sin la variable).
