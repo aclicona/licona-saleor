@@ -8,6 +8,20 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## Deriva JSON vs panel de Railway: builder de beat (2026-10-06, reporte B-978)
+
+**Qué divergía:** `railway.saleor-beat.json` decía `builder: DOCKERFILE` (+ `dockerfilePath`), pero el
+panel de `saleor-beat` usa **RAILPACK**. `test_railway_config.sh` afirmaba DOCKERFILE para los tres:
+se comparaba consigo mismo y nunca vio la diferencia. **Los `railway.saleor-*.json` no están enlazados
+en el panel** (ningún servicio tiene config file), así que son espejos inertes: **manda el panel**.
+Corregido: el JSON de beat dice RAILPACK; el test espera DOCKERFILE en api/worker y RAILPACK en beat.
+Cambiar el builder del panel es otra decisión (Andrés), no parte de este arreglo.
+**Cómo comprobar deriva:** `scripts/railway-seguro/drift_config.py` del root de ecommerce compara la
+salida de `get-service-config` con estos JSON (builder, dockerfilePath, startCommand, preDeploy,
+healthcheck).
+
+---
+
 ## Config-as-code por servicio de Railway (2026-10-06, reporte B-876)
 
 **Qué hay:** `railway.saleor-api.json`, `railway.saleor-worker.json` y `railway.saleor-beat.json`

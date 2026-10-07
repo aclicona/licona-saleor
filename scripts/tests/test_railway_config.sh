@@ -3,9 +3,15 @@
 #
 # Esos archivos reproducen lo que hay en el panel de Railway (leído el 2026-10-06).
 # Afirma: api migra en su preDeploy; worker/beat solo esperan (nunca migran); los
-# startCommand coinciden con el panel; y como con Dockerfile un startCommand
-# SUSTITUYE el ENTRYPOINT (docs.railway.com/deployments/start-command), que
-# `railway-entrypoint.sh` solo corre donde el startCommand lo invoca explícitamente.
+# startCommand coinciden con el panel; builder por servicio (api/worker DOCKERFILE,
+# beat RAILPACK, B-978); y que `railway-entrypoint.sh` solo corre donde el
+# startCommand lo invoca explícitamente. La premisa: con Dockerfile (api/worker) un
+# startCommand SUSTITUYE el ENTRYPOINT (docs.railway.com/deployments/start-command);
+# beat (Railpack) no tiene ENTRYPOINT de Dockerfile, por eso su startCommand invoca
+# `railway-entrypoint.sh` a mano.
+# LÍMITE: solo comprueba coherencia INTERNA del repo (el JSON contra sí mismo). La
+# comparación con el panel real la hace scripts/railway-seguro/drift_config.py del
+# root de ecommerce (B-978); los JSON no están enlazados en el panel, que es quien manda.
 # Uso: sh scripts/tests/test_railway_config.sh
 
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 2
@@ -29,7 +35,8 @@ igual() { [ "$(campo "$1" "$2")" = "$3" ]; echo $?; }
 for s in api worker beat; do
   f="railway.saleor-$s.json"
   verifica "$s: JSON válido con \$schema de Railway" "$(python3 -c 'import json,sys; sys.exit(0 if "railway.com/railway.schema.json" in json.load(open(sys.argv[1]))["$schema"] else 1)' "$RAIZ/$f" 2>/dev/null; echo $?)"
-  verifica "$s: builder DOCKERFILE" "$(igual "$f" build.builder '"DOCKERFILE"')"
+  esperado='"DOCKERFILE"'; [ "$s" = beat ] && esperado='"RAILPACK"'
+  verifica "$s: builder $(echo "$esperado" | tr -d '"')" "$(igual "$f" build.builder "$esperado")"
   verifica "$s: restartPolicy igual que railway.json" "$(igual "$f" deploy.restartPolicyType "$(campo railway.json deploy.restartPolicyType)")"
 done
 
@@ -47,6 +54,7 @@ verifica "beat: startCommand = panel" "$(igual railway.saleor-beat.json deploy.s
 # El startCommand sustituye al ENTRYPOINT: el entrypoint solo corre si se invoca a mano.
 verifica "beat: invoca railway-entrypoint.sh explícitamente" "$(campo railway.saleor-beat.json deploy.startCommand | grep -q 'scripts/railway-entrypoint.sh'; echo $?)"
 verifica "worker: NO invoca railway-entrypoint.sh (documentado: no corre, sin wait-for-db)" "$(! campo railway.saleor-worker.json deploy.startCommand | grep -q 'railway-entrypoint'; echo $?)"
+verifica "beat (Railpack): sin dockerfilePath" "$(igual railway.saleor-beat.json build.dockerfilePath '<ausente>')"
 verifica "Dockerfile declara el ENTRYPOINT que un startCommand sustituye" "$(grep -q '^ENTRYPOINT .*railway-entrypoint.sh' "$RAIZ/Dockerfile"; echo $?)"
 
 echo
