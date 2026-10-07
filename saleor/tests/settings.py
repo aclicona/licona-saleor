@@ -28,6 +28,23 @@ if xdist_worker := os.environ.get("PYTEST_XDIST_WORKER"):  # noqa: F405
 
 CELERY_TASK_ALWAYS_EAGER = True
 
+# B-1015: a test must never reach a real Celery broker. The URL points to a closed
+# port (instant refusal, never a live broker on the developer's machine; pytest-celery
+# exports its own `redis://localhost:6379/1`), and the retries are off so that a test
+# that does reach the broker raises `OperationalError` in seconds instead of hanging:
+# `celery.beat.Scheduler.producer` calls `ensure_connection(max_retries=
+# broker_connection_max_retries)`, whose default of 100 retries is ~45 min (B-1008).
+# `memory://` tests build their own app and are unaffected.
+# Celery gives the `CELERY_BROKER_URL` environment variable precedence over the
+# setting, hence the override of the environment too.
+CELERY_BROKER_URL = "redis://127.0.0.1:1/1"
+os.environ["CELERY_BROKER_URL"] = CELERY_BROKER_URL  # noqa: F405
+CELERY_BROKER_CONNECTION_MAX_RETRIES = 0
+CELERY_BROKER_CONNECTION_RETRY = False
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = False
+CELERY_BROKER_CONNECTION_TIMEOUT = 2
+CELERY_TASK_PUBLISH_RETRY = False
+
 PUBLIC_URL = "https://example.com"
 SECRET_KEY = "NOTREALLY"
 

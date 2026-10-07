@@ -8,6 +8,26 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-1015 — un test que llega al broker real falla en segundos, no se cuelga (2026-10-07)
+
+`saleor/tests/settings.py`: `CELERY_BROKER_URL = "redis://127.0.0.1:1/1"` (puerto cerrado, rechazo inmediato; tambien se
+fija en `os.environ`, porque Celery da precedencia a la variable de entorno y `pytest-celery` exporta
+`redis://localhost:6379/1`), `CELERY_BROKER_CONNECTION_MAX_RETRIES = 0`, `CELERY_BROKER_CONNECTION_RETRY(_ON_STARTUP) = False`,
+`CELERY_BROKER_CONNECTION_TIMEOUT = 2` y `CELERY_TASK_PUBLISH_RETRY = False`. Solo configuracion de test; `saleor/settings.py`
+no cambia. Test de regresion: `saleor/core/tests/test_celery_broker_unreachable.py` (producer de beat, producer real y `.delay()` sin
+eager deben lanzar `OperationalError` en < 10 s).
+
+**Por que:** B-1008 (suite colgada 60 min al 99 %) se debio a que `celery.beat.Scheduler.producer` llama a
+`ensure_connection(max_retries=broker_connection_max_retries)`; el valor por defecto (100 reintentos con backoff) son ~45 min de
+espera contra un broker inexistente en CI. B-1008 lo arreglo en un test; esto lo cierra para cualquiera futuro. Medido:
+`max_retries=0` en kombu 5.5.4 falla al instante (no significa «infinito»).
+
+**Verificacion:** sin el cambio (broker inalcanzable) el test se corta por `timeout 150` sin terminar; con el cambio pasa en ~2 s
+por test. El canario `test_beat_dispatch_in_memory.py` usa `memory://` propio y no se ve afectado. Si un test legitimo necesita un
+broker, que construya su propia app/conexion (como el canario), no que reutilice `saleor.celeryconf.app`.
+
+---
+
 ## B-1005 — la suite completa corre en cada push a `stable/*` (2026-10-07)
 
 `.github/workflows/ci-fork.yml`: el job `suite` («Suite completa (17k tests)», nombre sin cambios) pasa de
