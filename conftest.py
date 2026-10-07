@@ -1,4 +1,6 @@
+import faulthandler
 import os
+import sys
 
 import dj_database_url
 import django.test
@@ -113,3 +115,17 @@ if os.environ.get("PYTEST_DB_URL"):
                 )
 
     django.test.TransactionTestCase = Custom  # type:ignore[misc]
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session, exitstatus):
+    """Dump every thread's stack if the process does not exit after the session.
+
+    B-1008: in CI the suite reached 99 % with 0 failures and then hung with no pytest
+    summary. `faulthandler_timeout` only covers a running test, not the interpreter's
+    exit (non-daemon threads joined by `threading._shutdown`, atexit handlers). The
+    faulthandler watchdog is a C thread, so it fires even when Python is stuck there.
+    Only armed in CI (`B1008_EXIT_WATCHDOG`); `exit=False`, it just reports.
+    """
+    if os.environ.get("B1008_EXIT_WATCHDOG"):
+        faulthandler.dump_traceback_later(120, repeat=True, file=sys.stderr)

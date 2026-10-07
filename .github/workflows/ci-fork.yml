@@ -264,7 +264,9 @@ jobs:
     name: Suite completa (17k tests)
     runs-on: ubuntu-latest
     container: python:3.12
-    timeout-minutes: 60
+    # B-1008: bajado de 60 a 30. La suite termina en ~12-20 min; si el proceso se cuelga
+    # al salir, 30 min bastan para verlo sin quemar una hora de runner.
+    timeout-minutes: 30
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido' }}
 
     services:
@@ -300,11 +302,20 @@ jobs:
       - name: Sincronizar el entorno (uv sync --locked)
         run: uv sync --locked
 
+      # B-1008: la suite llegaba al 99 % y se colgaba sin resumen. `-rA` imprime el
+      # resultado de cada test (que se vea que corria cada worker) y `faulthandler_timeout`
+      # vuelca los stacks de todos los hilos si un test (o la salida) pasa de 300 s.
+      # `B1008_EXIT_WATCHDOG` arma (conftest.py) un volcado de stacks cada 120 s si el
+      # proceso no sale tras terminar la sesion: `faulthandler_timeout` no cubre la salida.
       - name: Correr la suite (sin e2e)
+        env:
+          B1008_EXIT_WATCHDOG: "1"
         run: |
           uv run pytest \
             -m "not e2e" \
             -n logical \
+            -rA \
+            -o faulthandler_timeout=300 \
             --junitxml=junit/test-results.xml \
             -o junit_family=legacy
 
