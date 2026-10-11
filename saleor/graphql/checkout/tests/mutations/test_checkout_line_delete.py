@@ -3,7 +3,9 @@ from unittest.mock import ANY, patch
 
 import graphene
 import pytest
+from django.db import connection
 from django.test import override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 from freezegun import freeze_time
 
@@ -350,6 +352,52 @@ def test_checkout_line_delete_non_removable_gift(user_api_client, checkout_line)
     assert len(errors) == 1
     assert errors[0]["field"] == "lineId"
     assert errors[0]["code"] == CheckoutErrorCode.NON_REMOVABLE_GIFT_LINE.name
+
+
+def test_checkout_line_delete_selects_count_does_not_depend_on_lines_number(
+    user_api_client, checkout_line
+):
+    # B-1217: `line in checkout.lines.all()` invocaba CheckoutLine.__eq__, que carga el
+    # FK variant de cada linea (+1 SQL por linea). El conteo debe ser el mismo con 2 y con 10 lineas.
+    # given
+    checkout = checkout_line.checkout
+
+    def add_lines(count):
+        # cantidades distintas: CheckoutLine.__eq__ compara variant y quantity, y con cantidades
+        # iguales el `in` del codigo viejo cortaba en la primera linea sin recorrer el resto
+        for index in range(count):
+            checkout_line.quantity = index + 1
+            checkout_line.pk = None
+            checkout_line.id = None
+            checkout_line.save()
+        return list(checkout.lines.all())
+
+    # se borra la ultima linea: el `in` del codigo viejo recorria (y comparaba) todas las anteriores
+    def delete_one_line_queries(lines):
+        variables = {
+            "id": to_global_id_or_none(checkout),
+            "lineId": to_global_id_or_none(lines[-1]),
+        }
+        with CaptureQueriesContext(connection) as ctx:
+            response = user_api_client.post_graphql(
+                MUTATION_CHECKOUT_LINE_DELETE, variables
+            )
+        assert not get_graphql_content(response)["data"]["checkoutLineDelete"]["errors"]
+        # Solo SELECT: un UPDATE de totales del checkout aparece o no segun el estado previo, no
+        # segun el numero de lineas; el N+1 de B-1217 eran SELECT del variant.
+        return sum(q["sql"].startswith("SELECT") for q in ctx.captured_queries)
+
+    # calentamiento: la primera ejecucion paga caches que no dependen del numero de lineas
+    delete_one_line_queries(add_lines(1))
+    checkout.lines.all().delete()
+
+    # when
+    selects_with_2_lines = delete_one_line_queries(add_lines(2))
+    checkout.lines.all().delete()
+    selects_with_10_lines = delete_one_line_queries(add_lines(10))
+
+    # then
+    assert selects_with_2_lines == selects_with_10_lines
 
 
 MUTATION_CHECKOUT_LINE_DELETE_WITH_ONLY_ID = """

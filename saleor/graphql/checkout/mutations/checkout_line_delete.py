@@ -78,7 +78,9 @@ class CheckoutLineDelete(BaseMutation):
                 code=CheckoutErrorCode.NON_REMOVABLE_GIFT_LINE.value,
             )
 
-        if line and line in checkout.lines.all():
+        # B-1217: `line in checkout.lines.all()` invocaba CheckoutLine.__eq__ (carga el FK variant
+        # de cada linea: +1 SQL por linea). Comprobar la pertenencia por pk es una sola consulta.
+        if line and checkout.lines.filter(pk=line.pk).exists():
             line.delete()
 
         manager = get_plugin_manager_promise(info.context).get()

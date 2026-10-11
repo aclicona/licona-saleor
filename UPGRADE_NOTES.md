@@ -8,6 +8,27 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-1217 — `checkoutLineDelete` sin N+1 al comprobar que la linea pertenece al checkout (2026-10-11)
+
+`saleor/graphql/checkout/mutations/checkout_line_delete.py`: `if line and line in checkout.lines.all():` pasa a
+`if line and checkout.lines.filter(pk=line.pk).exists():`. El `in` invoca `CheckoutLine.__eq__`
+(`saleor/checkout/models.py`), que compara `variant` y `quantity` y carga el FK `variant` de cada linea recorrida:
++1 SELECT por linea (80 SQL con 2 lineas, 88 con 10, medido por el candado `n1-catalogo` de `avisos_ecommerce.sh`).
+Con el parche el conteo no depende del numero de lineas (77 = 77 con N=2 y N=10). No se toca `CheckoutLine.__eq__`
+(tiene mas usuarios). Efecto lateral deseado: la comprobacion es por pk, asi que una linea de OTRO checkout con la
+misma variante y cantidad ya no pasa por "perteneciente" (con `__eq__` si pasaba y se borraba).
+
+Test: `test_checkout_line_delete_selects_count_does_not_depend_on_lines_number`
+(`saleor/graphql/checkout/tests/mutations/test_checkout_line_delete.py`): cuenta los SELECT de borrar la ultima linea
+con 2 y con 10 lineas (cantidades distintas, para que el `in` viejo no corte en la primera); con el codigo viejo falla
+(40 != 48).
+
+**Al hacer merge de upstream:** si el conflicto aparece en esa linea, conservar la comparacion por pk (o cualquier
+variante que no pase por `CheckoutLine.__eq__`). Si upstream ya la arreglo, retirar el parche y dejar el test, que
+sigue siendo valido. Verificar con el candado `[n1-catalogo]` (`CheckoutLineDelete sql_N2 == sql_N10`).
+
+---
+
 ## B-1019 — timeout global por test con `pytest-timeout` (2026-10-07)
 
 `pyproject.toml`: `pytest-timeout>=2.3.1,<3` en el grupo `dev` (solo test; el runtime no cambia) y `uv.lock` con la entrada
