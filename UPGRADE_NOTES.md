@@ -8,6 +8,32 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-1227 — inventario de __eq__ por contenido y dataclasses comparables (2026-10-11)
+
+Seguimiento de B-1223/B-1225: ¿hay otra clase con igualdad por contenido que cause el mismo bug? Inventario AST de
+`saleor/` (sin tests/migraciones): 5 `__eq__`/`__ne__` propios y 120 `@dataclass` (ninguno con `eq=False`; 18 `NamedTuple`,
+que comparan por tupla) y busqueda de `in` / `not in` / `.remove` / `.index` / `.count` / `==` / claves de set o dict
+sobre sus instancias. **Resultado: 0 riesgos nuevos; no hay cambio de comportamiento.**
+
+| Clase (archivo:linea) | Igualdad | Usos de pertenencia | Clasificacion |
+|---|---|---|---|
+| `CheckoutLine.__eq__` (`checkout/models.py:511`) | variante + cantidad; `__hash__` por pk | los 7 sitios de B-1223/B-1225 | ya arreglado / vigilado |
+| `LineInfo`, `CheckoutLineInfo` (`core/pricing/interface.py:21`, `checkout/fetch.py:54`) | `@dataclass` eq: campo a campo (delega en `CheckoutLine.__eq__`) | `voucher.py:219` (`id()`), `promotion.py:442` (`id()`) | ya arreglado (B-1223); sin `==` entre infos ni claves de set/dict (no son hashables) |
+| `Address.__eq__` (`account/models.py:108`) | `as_data()` sin pk; `__hash__` por pk | `checkout/utils.py:378,385` (`!=` y `old_address not in user.addresses.all()`), `delivery_context.py:158,321` | BENIGNO: preguntan «misma direccion» por contenido, es la intencion (no borrar la direccion vieja si el usuario ya tiene una igual) |
+| `OrderLineInfo`, `EditableOrderLineInfo`, `FulfillmentLineData`, `OrderBulk*Line`, `GiftCardLineData` (dataclass eq por contenido, campo `line` = `OrderLine`) | `OrderLine` no define `__eq__` (pk) | solo `line_data.line.id in ...` / `line_info.line.pk in ...` (`order/actions.py:1411,1732`, `order/calculations.py:717`, `order/fetch.py:271`) | BENIGNO: pertenencia por pk/id, no por instancia |
+| `CheckoutLineProblem*` (`checkout/problems.py:14,21`) | dataclass eq | `problems.py:175` `line not in not_available_lines` (lista blanca del candado) | BENIGNO: la disponibilidad depende solo del listing, dos lineas iguales son ambas (no) disponibles |
+| `DeliveryMethodBase`, `ShippingMethodInfo`, `CollectionPointInfo`, `CheckoutInfo` | dataclass eq | ninguno (`delivery_context.py:164` y `checkout_delivery_method_update.py:106` comparan `Warehouse`, modelo por pk) | BENIGNO |
+| `NonDatabaseFieldBase.__eq__` (`core/db/fields.py:63`), `JsonTruncText.__eq__` (`webhook/observability/payload_schema.py:13`) | `creation_counter` / valor | no son entidades de negocio | BENIGNO |
+| resto de dataclasses (payment, taxes, attribute, webhook, ...) | por valor | sin pertenencia sobre instancias con modelos sin guardar | BENIGNO (datos de valor) |
+
+Candado ampliado (`saleor/tests/test_fork_checkout_line_membership_drift.py`): ademas de los `in/remove` sobre lineas,
+falla si aparece un `__eq__`/`__ne__` NUEVO en produccion que no este en `EQ_POR_CONTENIDO_REVISADOS` (con su porque), y
+si una entrada queda obsoleta. No intenta marcar dataclasses: son 120 y casi todas de valor puro (falsos positivos).
+
+**Al hacer merge de upstream:** un `__eq__` nuevo hace fallar el candado; revisar sus usos de pertenencia antes de listarlo.
+
+---
+
 ## B-1223 — pertenencia de lineas por pk, no por `CheckoutLine.__eq__` (2026-10-11)
 
 Auditoria de todo `saleor/`: `CheckoutLine.__eq__` (`saleor/checkout/models.py`) compara `variant` y `quantity`, y

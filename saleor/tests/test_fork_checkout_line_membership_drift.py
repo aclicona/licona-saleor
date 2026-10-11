@@ -153,3 +153,62 @@ def test_la_lista_blanca_no_tiene_entradas_obsoletas():
         "Entradas de LISTA_BLANCA que ya no coinciden con ningún acierto "
         f"(retíralas): {obsoletas}"
     )
+
+
+# B-1227: (ruta, "Clase.__eq__") -> por qué la igualdad por contenido es inocua.
+# Una definición NUEVA de `__eq__` en producción obliga a revisar si hay `in` /
+# `.remove` / `==` sobre colecciones de esas instancias (mismo riesgo que B-1223).
+EQ_POR_CONTENIDO_REVISADOS = {
+    ("saleor/account/models.py", "Address.__eq__"): (
+        "Compara as_data() sin pk. Intencional: checkout/utils.py y "
+        "delivery_context.py preguntan 'misma dirección' por contenido."
+    ),
+    ("saleor/checkout/models.py", "CheckoutLine.__eq__"): (
+        "Origen de B-1223; sitios de pertenencia arreglados por pk/id() y "
+        "vigilados por los tests de arriba."
+    ),
+    ("saleor/checkout/models.py", "CheckoutLine.__ne__"): "Par de __eq__.",
+    ("saleor/core/db/fields.py", "NonDatabaseFieldBase.__eq__"): (
+        "Campo de esquema (creation_counter), no es dato de negocio."
+    ),
+    ("saleor/webhook/observability/payload_schema.py", "JsonTruncText.__eq__"): (
+        "Valor inmutable de texto truncado; igualdad por valor es lo correcto."
+    ),
+}
+
+
+def _eq_definidos(raiz_saleor: Path) -> set[tuple[str, str]]:
+    encontrados = set()
+    for ruta in sorted(raiz_saleor.rglob("*.py")):
+        if not _es_codigo_de_produccion(ruta):
+            continue
+        relativa = ruta.relative_to(raiz_saleor.parent).as_posix()
+        arbol = ast.parse(ruta.read_text(encoding="utf-8"), filename=str(ruta))
+        for clase in ast.walk(arbol):
+            if not isinstance(clase, ast.ClassDef):
+                continue
+            for miembro in clase.body:
+                if isinstance(miembro, ast.FunctionDef) and miembro.name in (
+                    "__eq__",
+                    "__ne__",
+                ):
+                    encontrados.add((relativa, f"{clase.name}.{miembro.name}"))
+    return encontrados
+
+
+def test_no_hay_eq_por_contenido_sin_revisar():
+    nuevos = sorted(_eq_definidos(RAIZ_SALEOR) - set(EQ_POR_CONTENIDO_REVISADOS))
+
+    assert not nuevos, (
+        "Nuevo `__eq__`/`__ne__` en producción (B-1227). Revisa si hay `in`, "
+        "`.remove`, `.index`, `.count` o `==` sobre colecciones de esas "
+        "instancias (dos objetos distintos e indistinguibles se confundirían) "
+        "y añádelo a EQ_POR_CONTENIDO_REVISADOS con justificación:\n"
+        + "\n".join(f"  {r}: {c}" for r, c in nuevos)
+    )
+
+
+def test_eq_revisados_no_tiene_entradas_obsoletas():
+    obsoletas = sorted(set(EQ_POR_CONTENIDO_REVISADOS) - _eq_definidos(RAIZ_SALEOR))
+
+    assert not obsoletas, f"Entradas que ya no existen (retíralas): {obsoletas}"
