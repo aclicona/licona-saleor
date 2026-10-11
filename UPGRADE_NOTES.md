@@ -11,7 +11,7 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 ## B-1227 — inventario de __eq__ por contenido y dataclasses comparables (2026-10-11)
 
 Seguimiento de B-1223/B-1225: ¿hay otra clase con igualdad por contenido que cause el mismo bug? Inventario AST de
-`saleor/` (sin tests/migraciones): 5 `__eq__`/`__ne__` propios y 120 `@dataclass` (ninguno con `eq=False`; 18 `NamedTuple`,
+`saleor/` (sin tests/migraciones): 5 `__eq__`/`__ne__` propios y 120 `@dataclass` (ninguno con `eq=False`; 17 `NamedTuple`,
 que comparan por tupla) y busqueda de `in` / `not in` / `.remove` / `.index` / `.count` / `==` / claves de set o dict
 sobre sus instancias. **Resultado: 0 riesgos nuevos; no hay cambio de comportamiento.**
 
