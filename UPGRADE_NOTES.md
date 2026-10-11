@@ -33,6 +33,31 @@ identidad. Upstream ya no tiene `checkout_line_delete.py` (B-1217 queda sin efec
 
 ---
 
+## B-1225 — candado contra pertenencia por contenido sobre lineas de checkout (2026-10-11)
+
+Seguimiento de B-1223. Inventario de `saleor/` (sin tests): 0 consumidores de la igualdad por contenido de
+`CheckoutLine.__eq__` / `LineInfo.__eq__` en produccion (nada depende de que dos lineas "iguales" se confundan). Antes
+de B-1223 habia 7 sitios de pertenencia sobre lineas: 6 arreglados (3 en `checkout/utils.py`, 2 en
+`discount/utils/promotion.py`, 1 en `discount/utils/voucher.py`) y 1 benigno (`checkout/problems.py`: la disponibilidad
+depende solo del listing del producto, asi que dos lineas de la misma variante son ambas disponibles o ambas no). El
+escaner marca ademas dos falsos positivos (`order_lines_create.py`: lista de pks; `order/utils.py`: `OrderLineDiscount`,
+igualdad de Django por pk), por lo que da 9 aciertos sobre `c334d80900^` y 3 sobre HEAD (los de la lista blanca).
+
+- Candado: `saleor/tests/test_fork_checkout_line_membership_drift.py` (AST, sin BD propia). Marca `x in ys` /
+  `x not in ys` y `ys.remove/index/count(x)` cuando `x` se llama `line`/`line_info` e `ys` parece coleccion de lineas.
+  Heuristica por nombre: se elude renombrando la variable. Tiene lista blanca por (ruta, linea fuente) con justificacion
+  y falla tambien si una entrada queda obsoleta.
+- Tests de punta a punta de B-1223 (commit 14e80cce71): `test_checkout_add_voucher_code_apply_once_per_order_with_equal_lines`
+  (`saleor/graphql/checkout/tests/mutations/test_checkout_add_promo_code.py`) y
+  `test_delete_gift_line_keeps_regular_line_equal_to_the_gift_line` (`saleor/checkout/tests/test_line_identity.py`).
+
+**Al hacer merge de upstream:** si upstream anade un `in` / `remove` sobre lineas, el candado lo marca: arreglarlo
+comparando por pk / `id()` (`_is_same_line_in`, `_remove_line_infos_by_identity`), NO silenciarlo en la lista blanca.
+Se recomienda abrir un issue upstream: eliminar los `__eq__/__ne__/__hash__` legados de `CheckoutLine` o declarar
+`@dataclass(eq=False)` en `LineInfo`; si lo aceptan, el candado puede retirarse.
+
+---
+
 ## B-1217 — `checkoutLineDelete` sin N+1 al comprobar que la linea pertenece al checkout (2026-10-11)
 
 `saleor/graphql/checkout/mutations/checkout_line_delete.py`: `if line and line in checkout.lines.all():` pasa a
