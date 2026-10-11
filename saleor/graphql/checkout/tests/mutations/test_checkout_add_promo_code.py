@@ -711,6 +711,113 @@ def test_checkout_add_variant_voucher_code_apply_once_per_order(
     assert checkout.subtotal + expected_discount == subtotal_before_voucher
 
 
+MUTATION_CHECKOUT_LINES_ADD_CUSTOM_PRICE = """
+    mutation($id: ID, $lines: [CheckoutLineInput!]!) {
+        checkoutLinesAdd(id: $id, lines: $lines) {
+            errors {
+                field
+                message
+                code
+            }
+        }
+    }
+"""
+
+
+def test_checkout_add_voucher_code_apply_once_per_order_with_equal_lines(
+    app_api_client,
+    permission_handle_checkouts,
+    checkout_with_single_item,
+    voucher,
+):
+    # given: dos líneas con la misma variante y cantidad (forceNewLine) y distinto
+    # precio personalizado (B-1225, punta a punta de B-1223)
+    checkout = checkout_with_single_item
+    line_a = checkout.lines.get()
+    variant = line_a.variant
+    variant_id = graphene.Node.to_global_id("ProductVariant", variant.pk)
+    cheap_price = Decimal(1)
+    expensive_price = Decimal(10)
+
+    add_lines_variables = {
+        "id": to_global_id_or_none(checkout),
+        "lines": [
+            {
+                "variantId": variant_id,
+                "quantity": line_a.quantity,
+                "forceNewLine": True,
+                "price": float(cheap_price),
+            }
+        ],
+    }
+    response = app_api_client.post_graphql(
+        MUTATION_CHECKOUT_LINES_ADD_CUSTOM_PRICE,
+        add_lines_variables,
+        permissions=[permission_handle_checkouts],
+        check_no_permissions=False,
+    )
+    content = get_graphql_content(response)
+    assert not content["data"]["checkoutLinesAdd"]["errors"]
+    line_a.price_override = expensive_price
+    line_a.save(update_fields=["price_override"])
+    line_b = checkout.lines.exclude(pk=line_a.pk).get()
+    assert line_a == line_b
+    assert line_b.price_override == cheap_price
+
+    discount_percentage = Decimal(50)
+    voucher.type = VoucherType.SPECIFIC_PRODUCT
+    voucher.apply_once_per_order = True
+    voucher.discount_value_type = DiscountValueType.PERCENTAGE
+    voucher.save(update_fields=["type", "apply_once_per_order", "discount_value_type"])
+    voucher.products.set([variant.product])
+    voucher_listing = voucher.channel_listings.get(channel=checkout.channel)
+    voucher_listing.discount_value = discount_percentage
+    voucher_listing.save(update_fields=["discount_value"])
+
+    # el descuento se aplica una sola vez, sobre la línea más barata
+    expected_discount = cheap_price * discount_percentage / 100
+    assert (
+        expected_discount != (cheap_price + expensive_price) * discount_percentage / 100
+    )
+
+    variables = {
+        "id": to_global_id_or_none(checkout),
+        "promoCode": voucher.code,
+    }
+
+    # when
+    data = _mutate_checkout_add_promo_code(app_api_client, variables)
+
+    # then
+    assert not data["errors"]
+    checkout.refresh_from_db()
+    assert checkout.voucher_code == voucher.code
+    assert checkout.discount_amount == expected_discount
+    assert Decimal(str(data["checkout"]["discount"]["amount"])) == expected_discount
+    # a nivel de línea: solo la más barata recibe el voucher
+    lines_query = """
+        query($id: ID) {
+            checkout(id: $id) {
+                lines { id totalPrice { gross { amount } } }
+            }
+        }
+    """
+    response = app_api_client.post_graphql(
+        lines_query,
+        {"id": to_global_id_or_none(checkout)},
+        permissions=[permission_handle_checkouts],
+        check_no_permissions=False,
+    )
+    totals = {
+        line["id"]: Decimal(str(line["totalPrice"]["gross"]["amount"]))
+        for line in get_graphql_content(response)["data"]["checkout"]["lines"]
+    }
+    assert totals == {
+        to_global_id_or_none(line_a): expensive_price,
+        to_global_id_or_none(line_b): cheap_price - expected_discount,
+    }
+
+
 def test_checkout_add_voucher_code_not_applicable_voucher(
     api_client, checkout_with_item, voucher_with_high_min_spent_amount
 ):

@@ -138,3 +138,25 @@ def test_remove_line_infos_by_identity_keeps_equal_line_info(
 
     # then: se quita B, no la primera línea "igual"
     assert [info.line.pk for info in lines_info] == [line_a.pk]
+
+
+def test_delete_gift_line_keeps_regular_line_equal_to_the_gift_line(
+    checkout_with_single_item,
+):
+    # given: una línea regular y una de regalo con igual variante y cantidad; la
+    # regular va primero en `lines_info`, así que `list.remove` quitaría esa
+    from ...discount.utils.promotion import delete_gift_line
+
+    checkout = checkout_with_single_item
+    regular_line = checkout.lines.get()
+    gift_line = _duplicate_line(regular_line, is_gift=True)
+    assert regular_line == gift_line
+    lines_info, _ = fetch_checkout_lines(checkout)
+    assert [info.line.pk for info in lines_info] == [regular_line.pk, gift_line.pk]
+
+    # when
+    delete_gift_line(checkout, lines_info)
+
+    # then: se quita la línea de regalo (de la lista y de la BD), no la regular
+    assert [info.line.pk for info in lines_info] == [regular_line.pk]
+    assert list(checkout.lines.values_list("pk", flat=True)) == [regular_line.pk]
