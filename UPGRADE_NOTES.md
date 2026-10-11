@@ -8,6 +8,31 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-1223 — pertenencia de lineas por pk, no por `CheckoutLine.__eq__` (2026-10-11)
+
+Auditoria de todo `saleor/`: `CheckoutLine.__eq__` (`saleor/checkout/models.py`) compara `variant` y `quantity`, y
+`LineInfo` es un `@dataclass`, asi que su `==` delega en ese `__eq__`. `OrderLine` no define `__eq__` (igualdad de Django
+por pk) y no se toca. Cuatro sitios hacian `in` / `list.remove` sobre lineas del MISMO checkout (no cruzan checkouts:
+las lineas se cargan filtradas por `checkout_id`), y dos lineas del mismo checkout con igual variante y cantidad
+(`forceNewLine`) se confundian:
+
+- `saleor/checkout/utils.py` (`_append_line_to_update`): `line not in to_delete` / `line not in to_update` -> helper
+  `_is_same_line_in` (compara pk). Antes, `checkoutLinesUpdate` que borraba la linea A y fijaba precio/motivo en la
+  linea B (igual a A) descartaba en silencio el cambio de B.
+- `saleor/discount/utils/voucher.py` (`attach_voucher_to_line_info`): `line_info in discounted_lines_by_voucher` ->
+  comparacion por `id()` del objeto. Antes, con un voucher `apply_once_per_order` y dos lineas iguales de distinto precio
+  (`price_override`, solo staff), el voucher se adjuntaba a las dos (doble descuento).
+- `saleor/discount/utils/promotion.py` (`delete_gift_line` y el reemplazo de la linea regalo): `lines_info.remove(x)` ->
+  `_remove_line_infos_by_identity` (por `id()`); `remove` quitaba la primera linea "igual", no necesariamente la pedida.
+
+Tests: `saleor/checkout/tests/test_line_identity.py` (4); con el codigo viejo los 4 fallan.
+
+**Al hacer merge de upstream:** upstream/main (782a751f62) mantiene el `__eq__` y los mismos `not in to_delete` /
+`in discounted_lines_by_voucher` / `lines_info.remove`; si el conflicto cae en esas lineas, conservar la comparacion por
+identidad. Upstream ya no tiene `checkout_line_delete.py` (B-1217 queda sin efecto alli).
+
+---
+
 ## B-1217 — `checkoutLineDelete` sin N+1 al comprobar que la linea pertenece al checkout (2026-10-11)
 
 `saleor/graphql/checkout/mutations/checkout_line_delete.py`: `if line and line in checkout.lines.all():` pasa a

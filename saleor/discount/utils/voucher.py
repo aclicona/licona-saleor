@@ -211,8 +211,12 @@ def attach_voucher_to_line_info(
     if voucher.apply_once_per_order:
         if cheapest_line := get_the_cheapest_line(lines_included_in_discount):
             discounted_lines_by_voucher = [cheapest_line]
+    # Compare by identity: `LineInfo` equality delegates to `CheckoutLine.__eq__`
+    # (variant and quantity), which would match a different line of the same
+    # checkout and attach an apply-once voucher twice (B-1223).
+    discounted_info_ids = {id(info) for info in discounted_lines_by_voucher}
     for line_info in lines_info:
-        if line_info in discounted_lines_by_voucher:
+        if id(line_info) in discounted_info_ids:
             line_info.voucher = voucher
             line_info.voucher_code = voucher_info.voucher_code
 

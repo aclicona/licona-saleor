@@ -297,6 +297,12 @@ def _get_line_if_exist(line_data, lines_by_ids):
     return None
 
 
+def _is_same_line_in(line, lines) -> bool:
+    # `CheckoutLine.__eq__` compares variant and quantity, so `line in lines` would
+    # also match a different line of the same checkout (B-1223). Compare by pk.
+    return any(other.pk == line.pk for other in lines)
+
+
 def _append_line_to_update(to_update, to_delete, line_data, replace, line):
     if line_data.metadata_list:
         line.store_value_in_metadata(
@@ -311,13 +317,13 @@ def _append_line_to_update(to_update, to_delete, line_data, replace, line):
                 line.quantity += quantity
             to_update.append(line)
     if line_data.custom_price_to_update:
-        if line not in to_delete:
+        if not _is_same_line_in(line, to_delete):
             line.price_override = line_data.custom_price
             to_update.append(line)
     if line_data.custom_price_reason_to_update:
-        if line not in to_delete:
+        if not _is_same_line_in(line, to_delete):
             line.price_override_reason = line_data.custom_price_reason
-            if line not in to_update:
+            if not _is_same_line_in(line, to_update):
                 to_update.append(line)
 
 

@@ -431,14 +431,24 @@ def delete_gift_lines_qs(
             ).delete()
 
 
+def _remove_line_infos_by_identity(lines_info: list, to_remove: list) -> None:
+    """Remove the given line infos from `lines_info` in place, by object identity.
+
+    `list.remove` uses `==`, and `LineInfo` equality delegates to
+    `CheckoutLine.__eq__` (variant and quantity), so it could drop a different line of
+    the same checkout (B-1223).
+    """
+    ids = {id(info) for info in to_remove}
+    lines_info[:] = [info for info in lines_info if id(info) not in ids]
+
+
 def delete_gift_line(
     order_or_checkout: Checkout | Order,
     lines_info: list["CheckoutLineInfo"] | list["EditableOrderLineInfo"],
 ):
     if gift_line_infos := [line for line in lines_info if line.line.is_gift]:
         delete_gift_lines_qs(order_or_checkout)
-        for gift_line_info in gift_line_infos:
-            lines_info.remove(gift_line_info)  # type: ignore[arg-type]
+        _remove_line_infos_by_identity(lines_info, gift_line_infos)
 
 
 def _lock_order_or_checkout(
@@ -879,7 +889,7 @@ def _handle_gift_reward(
         (line_info for line_info in lines_info if line_info.line.pk == line.id), None
     )
     if line_info:
-        lines_info.remove(line_info)  # type: ignore[arg-type]
+        _remove_line_infos_by_identity(lines_info, [line_info])
 
     variant = gift_listing.variant
     init_values = {
