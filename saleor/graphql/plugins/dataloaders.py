@@ -33,7 +33,11 @@ class PluginManagerByRequestorDataloader(DataLoader[Requestor, PluginsManager]):
 
     def batch_load(self, keys):
         allow_replica = getattr(self.context, "allow_replica", True)
-        return [get_plugins_manager(allow_replica, lambda: user) for user in keys]
+        # `user=user` fija el requestor de cada iteracion: el getter se evalua de forma
+        # perezosa y sin esto todos los managers verian el ultimo requestor del lote (B023).
+        return [
+            get_plugins_manager(allow_replica, lambda user=user: user) for user in keys
+        ]
 
 
 class AnonymousPluginManagerLoader(DataLoader[None, PluginsManager]):

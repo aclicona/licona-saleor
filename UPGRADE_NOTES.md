@@ -1914,3 +1914,20 @@ El mismo bug de upstream (late binding) se arreglo cuatro veces en `saleor/wareh
   `functools.partial` no se marcan.
 - **Verificado:** verde sobre `da06cea754`; revertir cualquiera de los 4 `partial` a `lambda` lo pone en rojo.
 - Solo cubre `on_commit`; otros callbacks diferidos (`apply_async` con lambda, etc.) no.
+
+## B-1249 — late binding real en el dataloader de plugins y B023 activado (2026-10-12)
+
+Seguimiento de B-1246: los 2 hallazgos de ruff B023 que impedian activarlo.
+
+- **`saleor/graphql/plugins/dataloaders.py` (`PluginManagerByRequestorDataloader.batch_load`): bug real.**
+  `lambda: user` dentro de la comprension se guardaba como `requestor_getter` y se evalua de forma perezosa al cargar
+  plugins, asi que con un lote de >=2 requestors distintos todos los managers devolvian el ultimo. Arreglo:
+  `lambda user=user: user`. Test: `saleor/graphql/plugins/tests/test_plugin_manager_by_requestor_dataloader.py`
+  (sin cambio, rojo con `managers[0]` devolviendo el requestor B; con el arreglo, verde).
+- **`saleor/plugins/avatax/plugin.py` (~L237): falso positivo.** El `SimpleLazyObject(lambda: ...(line))` se pasa como
+  `base_value` y se consume dentro de la misma iteracion; solo se anota `# noqa: B023` con su motivo.
+- **`pyproject.toml`:** `B023` sale del `ignore` global; `ruff check saleor/` queda en 0 con la regla activa.
+- **En un rebase de upstream:** si `B023` reaparece en `ignore` o el `lambda: user` vuelve al dataloader (conflicto en
+  `dataloaders.py`), reaplicar; `ruff check saleor/ --select B023` debe dar 0 y el test nuevo lo detecta. Los candados
+  de B-1246 (`test_on_commit_late_binding.py`) siguen vigentes.
+- Candidato a reportarse upstream (Saleor): el dataloader tiene el bug en `main`.
