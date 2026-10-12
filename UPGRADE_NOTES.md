@@ -178,6 +178,27 @@ Pendiente: reportar ambos sitios (`allocate_stocks` y `decrease_stock`) upstream
 
 ---
 
+## B-1243 — `deallocate_stock` y `deallocate_stock_for_orders`: el aviso de "vuelve a haber stock" usaba siempre el ultimo stock (late-binding) (2026-10-12)
+
+`saleor/warehouse/management.py`: mismo bug que B-1236 y B-1238. En `deallocate_stock`
+(`for allocation_before_update in allocations_before_update`) y en `deallocate_stock_for_orders`
+(`for allocation in allocations_for_back_in_stock...`) el callback de `transaction.on_commit` era
+`lambda: trigger_product_variant_back_in_stock(<stock del bucle>, ...)`; se evalua tras el commit y lee el ULTIMO stock
+del bucle, asi que si dos stocks volvian a tener disponibilidad en la misma llamada el evento
+`PRODUCT_VARIANT_BACK_IN_STOCK` salia dos veces con el ultimo y el otro nunca se avisaba. Fix minimo:
+`partial(trigger_product_variant_back_in_stock, <stock>, requestor=requestor)` en ambos sitios.
+
+Tests (`saleor/warehouse/tests/test_stock_management.py`):
+`test_deallocate_stock_back_in_stock_event_fires_with_each_restored_stock` y
+`test_deallocate_stock_for_orders_back_in_stock_event_fires_with_each_restored_stock`: dos lineas de variantes distintas con
+ambos stocks agotados, liberados en una llamada; con el codigo viejo fallan (`[2, 2] != [1, 2]`).
+
+Pendiente: incluir estos dos sitios en el issue upstream (saleor/saleor) de B-1244.
+
+**Al hacer merge de upstream:** si upstream ya lo arreglo, retirar el parche y dejar los tests.
+
+---
+
 ## B-1218 — `allocate_stocks` sin N+1 al crear el pedido en `checkoutComplete` (2026-10-12)
 
 `saleor/warehouse/management.py` (`allocate_stocks`, bloque posterior a `Allocation.objects.bulk_create`): dos bucles

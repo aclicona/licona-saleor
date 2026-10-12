@@ -444,9 +444,13 @@ def deallocate_stock(
             allocation_before_update.stock_available_quantity <= 0
             and available_stock_now > 0
         ):
+            # partial (not lambda): bind this stock now; a lambda would read the loop
+            # variable after the commit, i.e. always the last stock.
             transaction.on_commit(
-                lambda: trigger_product_variant_back_in_stock(
-                    allocation_before_update.stock, requestor=requestor
+                partial(
+                    trigger_product_variant_back_in_stock,
+                    allocation_before_update.stock,
+                    requestor=requestor,
                 )
             )
             back_in_stock_stocks.append(allocation_before_update.stock)
@@ -805,9 +809,12 @@ def deallocate_stock_for_orders(
     back_in_stock_stocks: list[Stock] = []
     for allocation in allocations_for_back_in_stock.annotate_stock_available_quantity():
         if allocation.stock_available_quantity <= 0:
+            # partial (not lambda): bind this stock now (see deallocate_stock).
             transaction.on_commit(
-                lambda: trigger_product_variant_back_in_stock(
-                    allocation.stock, requestor=requestor
+                partial(
+                    trigger_product_variant_back_in_stock,
+                    allocation.stock,
+                    requestor=requestor,
                 )
             )
             back_in_stock_stocks.append(allocation.stock)

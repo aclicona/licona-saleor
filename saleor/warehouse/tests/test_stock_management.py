@@ -1984,3 +1984,75 @@ def test_deallocate_stock_for_orders_skips_channel_event_when_legacy_flag_enable
 
     # then
     mocked_trigger.assert_not_called()
+
+
+def _exhaust_stocks_of_order_lines(order):
+    # every stock of the order is fully allocated (available = 0), so releasing the
+    # allocations makes each stock available again ("back in stock")
+    allocations = list(
+        Allocation.objects.filter(order_line__order=order).select_related("stock")
+    )
+    stocks = [allocation.stock for allocation in allocations]
+    assert len({stock.pk for stock in stocks}) == 2
+    for allocation in allocations:
+        allocation.stock.quantity = allocation.quantity_allocated
+        allocation.stock.quantity_allocated = allocation.quantity_allocated
+    Stock.objects.bulk_update(stocks, ["quantity", "quantity_allocated"])
+    return allocations
+
+
+@mock.patch("saleor.warehouse.management.trigger_product_variant_back_in_stock")
+def test_deallocate_stock_back_in_stock_event_fires_with_each_restored_stock(
+    mocked_variant_trigger,
+    order_with_lines,
+    site_settings,
+    django_capture_on_commit_callbacks,
+):
+    # given - two lines of different variants, each with its own exhausted stock; the
+    # same call restores both, so the deferred on_commit callback must carry the
+    # matching stock for each one (not the last one of the loop)
+    allocations = _exhaust_stocks_of_order_lines(order_with_lines)
+    line_infos = [
+        OrderLineInfo(
+            line=allocation.order_line,
+            variant=allocation.order_line.variant,
+            quantity=allocation.quantity_allocated,
+            warehouse_pk=allocation.stock.warehouse_id,
+        )
+        for allocation in allocations
+    ]
+
+    # when
+    with django_capture_on_commit_callbacks(execute=True):
+        deallocate_stock(line_infos, site_settings=site_settings, requestor=None)
+
+    # then
+    assert mocked_variant_trigger.call_count == 2
+    fired_stock_pks = sorted(
+        c.args[0].pk for c in mocked_variant_trigger.call_args_list
+    )
+    assert fired_stock_pks == sorted(a.stock.pk for a in allocations)
+
+
+@mock.patch("saleor.warehouse.management.trigger_product_variant_back_in_stock")
+def test_deallocate_stock_for_orders_back_in_stock_event_fires_with_each_restored_stock(
+    mocked_variant_trigger,
+    order_with_lines,
+    site_settings,
+    django_capture_on_commit_callbacks,
+):
+    # given - same scenario through the bulk entry point
+    allocations = _exhaust_stocks_of_order_lines(order_with_lines)
+
+    # when
+    with django_capture_on_commit_callbacks(execute=True):
+        deallocate_stock_for_orders(
+            [order_with_lines.id], site_settings=site_settings, requestor=None
+        )
+
+    # then
+    assert mocked_variant_trigger.call_count == 2
+    fired_stock_pks = sorted(
+        c.args[0].pk for c in mocked_variant_trigger.call_args_list
+    )
+    assert fired_stock_pks == sorted(a.stock.pk for a in allocations)
