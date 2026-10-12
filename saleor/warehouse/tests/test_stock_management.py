@@ -1002,6 +1002,63 @@ def test_decrease_stock_multiple_lines(allocations, site_settings):
     assert allocation_1.quantity_allocated == 10
 
 
+@mock.patch("saleor.warehouse.management.trigger_product_variant_out_of_stock")
+def test_decrease_stock_out_of_stock_event_fires_with_each_exhausted_stock(
+    mocked_variant_trigger,
+    order_with_lines,
+    site_settings,
+    django_capture_on_commit_callbacks,
+):
+    # given - two lines of different variants, each with its own stock; both stocks
+    # are exhausted by the same call, so the deferred on_commit callback must carry
+    # the matching stock for each one (not the last one of the loop)
+    order_line_1 = order_with_lines.lines.first()
+    order_line_2 = order_with_lines.lines.last()
+    assert order_line_1.variant_id != order_line_2.variant_id
+    allocation_1 = order_line_1.allocations.first()
+    allocation_2 = order_line_2.allocations.first()
+    stock_1 = allocation_1.stock
+    stock_2 = allocation_2.stock
+    assert stock_1.pk != stock_2.pk
+
+    quantity = 5
+    for stock in (stock_1, stock_2):
+        stock.quantity = quantity
+        stock.quantity_allocated = quantity
+    Stock.objects.bulk_update([stock_1, stock_2], ["quantity", "quantity_allocated"])
+    for allocation in (allocation_1, allocation_2):
+        allocation.quantity_allocated = quantity
+    Allocation.objects.bulk_update([allocation_1, allocation_2], ["quantity_allocated"])
+
+    # when
+    with django_capture_on_commit_callbacks(execute=True):
+        decrease_stock(
+            [
+                OrderLineInfo(
+                    line=order_line_1,
+                    quantity=quantity,
+                    variant=order_line_1.variant,
+                    warehouse_pk=stock_1.warehouse.pk,
+                ),
+                OrderLineInfo(
+                    line=order_line_2,
+                    quantity=quantity,
+                    variant=order_line_2.variant,
+                    warehouse_pk=stock_2.warehouse.pk,
+                ),
+            ],
+            site_settings=site_settings,
+            requestor=None,
+        )
+
+    # then
+    assert mocked_variant_trigger.call_count == 2
+    fired_stock_pks = sorted(
+        c.args[0].pk for c in mocked_variant_trigger.call_args_list
+    )
+    assert fired_stock_pks == sorted([stock_1.pk, stock_2.pk])
+
+
 def test_decrease_stock_multiple_lines_deallocate_stock_raises_error(
     order_with_lines, site_settings
 ):

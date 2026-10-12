@@ -153,9 +153,26 @@ llamada; con el codigo viejo falla (`[1, 1] != [1, 2]`: el mismo stock dos veces
 `..._two_new_allocations_exhaust_stock_with_previous_allocation` y `..._leave_stock_does_not_trigger_out_of_stock`
 fijan el comportamiento de B-1218 (suma agrupada de asignaciones).
 
-Pendiente: conviene reportarlo upstream (saleor/saleor). El mismo patron (`lambda` sobre la variable del bucle) existe en
-`decrease_stock` (`for stock in Stock.objects.filter(...)...: transaction.on_commit(lambda: ...(stock, ...))`); no se ha
-tocado aqui.
+Pendiente: conviene reportarlo upstream (saleor/saleor). El mismo patron (`lambda` sobre la variable del bucle) existia en
+`decrease_stock`; se arreglo despues en B-1238 (ver abajo).
+
+**Al hacer merge de upstream:** si upstream ya lo arreglo, retirar el parche y dejar el test.
+
+---
+
+## B-1238 — `decrease_stock`: el aviso de agotado usaba siempre el ultimo stock (late-binding) (2026-10-12)
+
+`saleor/warehouse/management.py` (`decrease_stock`, bucle final `for stock in Stock.objects.filter(id__in=...)`): mismo
+bug que B-1236. El callback de `transaction.on_commit` era `lambda: trigger_product_variant_out_of_stock(stock, ...)`; se
+evalua tras el commit y lee la ULTIMA `stock` del bucle, asi que si dos stocks quedaban agotados en la misma llamada el
+evento `PRODUCT_VARIANT_OUT_OF_STOCK` salia dos veces con el ultimo y el otro nunca se avisaba. Fix minimo:
+`partial(trigger_product_variant_out_of_stock, stock, requestor=requestor)`.
+
+Test: `test_decrease_stock_out_of_stock_event_fires_with_each_exhausted_stock`
+(`saleor/warehouse/tests/test_stock_management.py`): dos lineas de variantes distintas, ambos stocks agotados en una llamada;
+con el codigo viejo falla (`[2, 2] != [1, 2]`).
+
+Pendiente: reportar ambos sitios (`allocate_stocks` y `decrease_stock`) upstream en un solo issue (saleor/saleor).
 
 **Al hacer merge de upstream:** si upstream ya lo arreglo, retirar el parche y dejar el test.
 

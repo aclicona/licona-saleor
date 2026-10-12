@@ -656,8 +656,12 @@ def decrease_stock(
     stock_ids = (s.id for s in stocks)
     for stock in Stock.objects.filter(id__in=stock_ids).annotate_available_quantity():
         if stock.available_quantity <= 0:
+            # partial (not lambda): bind this stock now; a lambda would read the loop
+            # variable after the commit, i.e. always the last stock.
             transaction.on_commit(
-                lambda: trigger_product_variant_out_of_stock(stock, requestor=requestor)
+                partial(
+                    trigger_product_variant_out_of_stock, stock, requestor=requestor
+                )
             )
 
 
