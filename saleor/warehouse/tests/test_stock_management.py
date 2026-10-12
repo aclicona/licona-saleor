@@ -1,13 +1,16 @@
 from unittest import mock
 
 import pytest
+from django.db import connection
 from django.db.models import Sum
 from django.db.models.functions import Coalesce
+from django.test.utils import CaptureQueriesContext
 
 from ...channel import AllocationStrategy
 from ...core.exceptions import InsufficientStock
 from ...order.fetch import OrderLineInfo
 from ...order.models import OrderLine
+from ...product.models import ProductVariant
 from ...warehouse.models import Stock
 from ..management import (
     allocate_preorders,
@@ -44,6 +47,53 @@ def test_allocate_stocks(order_line, stock, channel_USD, site_settings):
     assert stock.quantity == 100
     allocation = Allocation.objects.get(order_line=order_line, stock=stock)
     assert allocation.quantity_allocated == stock.quantity_allocated == 50
+
+
+def test_allocate_stocks_selects_count_does_not_depend_on_lines_number(
+    order_line, stock, channel_USD, site_settings
+):
+    # B-1218: allocate_stocks hacia 1 SELECT del Stock (`allocation.stock` lazy) y 1 SUM de
+    # asignaciones por cada asignacion creada. El conteo debe ser el mismo con 2 y con 10 lineas.
+    # given
+    variant = order_line.variant
+
+    def build_lines(count):
+        lines_info = []
+        for index in range(count):
+            new_variant = ProductVariant.objects.create(
+                product=variant.product, sku=f"b1218-{count}-{index}"
+            )
+            Stock.objects.create(
+                warehouse=stock.warehouse, product_variant=new_variant, quantity=100
+            )
+            line = OrderLine.objects.get(pk=order_line.pk)
+            line.pk = None
+            line.variant = new_variant
+            line.save()
+            lines_info.append(OrderLineInfo(line=line, variant=new_variant, quantity=1))
+        return lines_info
+
+    def allocate_selects(lines_info):
+        with CaptureQueriesContext(connection) as ctx:
+            allocate_stocks(
+                lines_info,
+                COUNTRY_CODE,
+                channel_USD,
+                site_settings=site_settings,
+                requestor=None,
+                calculate_stocks_with_shipping_zones=True,
+            )
+        return sum(q["sql"].startswith("SELECT") for q in ctx.captured_queries)
+
+    # calentamiento: la primera ejecucion paga caches que no dependen del numero de lineas
+    allocate_selects(build_lines(1))
+
+    # when
+    selects_with_2_lines = allocate_selects(build_lines(2))
+    selects_with_10_lines = allocate_selects(build_lines(10))
+
+    # then
+    assert selects_with_2_lines == selects_with_10_lines
 
 
 def test_allocate_stocks_multiple_lines_the_highest_stock_strategy(

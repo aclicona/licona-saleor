@@ -138,6 +138,28 @@ Se recomienda abrir un issue upstream: eliminar los `__eq__/__ne__/__hash__` leg
 
 ---
 
+## B-1218 — `allocate_stocks` sin N+1 al crear el pedido en `checkoutComplete` (2026-10-12)
+
+`saleor/warehouse/management.py` (`allocate_stocks`, bloque posterior a `Allocation.objects.bulk_create`): dos bucles
+por asignacion pasan a consultas unicas. (1) `alloc.stock` (FK lazy, 1 SELECT de `warehouse_stock` por asignacion) se
+sustituye por `Stock.objects.in_bulk(...)`; cada asignacion recibe una copia (`copy.copy`) del stock y el mapa de
+`bulk_update` usa las instancias originales, de modo que la `F("quantity_allocated") + n` sigue aplicandose solo a la
+instancia que se persiste. (2) `Allocation.objects.filter(stock_id=...).aggregate(Sum(...))` por asignacion pasa a un
+`values("stock_id").annotate(Sum(...))` para todos los stocks (1 consulta, mismo punto de la transaccion: despues del
+`bulk_create`). El `select_for_update` de stocks/asignaciones, su orden, `InsufficientStock` y el orden de asignacion
+entre almacenes no se tocan. Medido por el candado `n1-catalogo` de `avisos_ecommerce.sh`: `CheckoutComplete`
+151 SQL con 2 lineas y 167 con 10 (+2 por linea) -> conteo independiente del numero de lineas.
+
+Test: `test_allocate_stocks_selects_count_does_not_depend_on_lines_number`
+(`saleor/warehouse/tests/test_stock_management.py`): cuenta los SELECT de `allocate_stocks` con 2 y con 10 lineas; con el
+codigo viejo falla (6 != 22).
+
+**Al hacer merge de upstream:** si el conflicto aparece en ese bloque de `allocate_stocks`, conservar la carga de los
+stocks y la suma de asignaciones en una sola consulta por bloque. Si upstream ya lo arreglo, retirar el parche y dejar el
+test. Verificar con el candado `[n1-catalogo]` (`CheckoutComplete sql_N2 == sql_N10`).
+
+---
+
 ## B-1217 — `checkoutLineDelete` sin N+1 al comprobar que la linea pertenece al checkout (2026-10-11)
 
 `saleor/graphql/checkout/mutations/checkout_line_delete.py`: `if line and line in checkout.lines.all():` pasa a

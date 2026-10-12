@@ -1,3 +1,4 @@
+import copy
 import math
 from collections import defaultdict
 from collections.abc import Iterable
@@ -200,7 +201,13 @@ def allocate_stocks(
     if allocations:
         Allocation.objects.bulk_create(allocations)
 
-        stocks_to_update_map = {alloc.stock_id: alloc.stock for alloc in allocations}
+        # B-1218: una sola consulta para los Stock (antes, `alloc.stock` lazy = 1 SELECT por
+        # asignacion). Cada asignacion recibe su propia copia, igual que antes: la F() de abajo
+        # solo se aplica a la instancia del mapa de actualizacion.
+        stocks_by_id = Stock.objects.in_bulk({alloc.stock_id for alloc in allocations})
+        for alloc in allocations:
+            alloc.stock = copy.copy(stocks_by_id[alloc.stock_id])
+        stocks_to_update_map = stocks_by_id
         quantity_from_allocations: dict[int, int] = defaultdict(int)
 
         for alloc in allocations:
@@ -216,13 +223,15 @@ def allocate_stocks(
             site_settings.use_legacy_shipping_zone_stock_availability
         )
         out_of_stock_stocks: list[Stock] = []
+        # B-1218: suma de asignaciones de todos los stocks en una consulta (antes, 1 por asignacion)
+        allocated_by_stock_id = {
+            row["stock_id"]: row["allocated_sum"]
+            for row in Allocation.objects.filter(stock_id__in=stocks_by_id)
+            .values("stock_id")
+            .annotate(allocated_sum=Sum("quantity_allocated"))
+        }
         for allocation in allocations:
-            allocated_stock = (
-                Allocation.objects.filter(stock_id=allocation.stock_id).aggregate(
-                    Sum("quantity_allocated")
-                )["quantity_allocated__sum"]
-                or 0
-            )
+            allocated_stock = allocated_by_stock_id.get(allocation.stock_id) or 0
             if not max(allocation.stock.quantity - allocated_stock, 0):
                 transaction.on_commit(
                     lambda: trigger_product_variant_out_of_stock(
