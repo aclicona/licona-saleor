@@ -57,7 +57,7 @@ from ....product.models import (
 )
 from ....shipping.models import ShippingMethod, ShippingMethodTranslation
 from ....tests import race_condition
-from ....tests.utils import dummy_editorjs
+from ....tests.utils import SameCheckoutInfo, SameLineInfos, dummy_editorjs
 from ....warehouse import WarehouseClickAndCollectOption
 from ....warehouse.models import PreorderReservation, Reservation, Stock, Warehouse
 from ...core.utils import to_global_id_or_none
@@ -173,8 +173,8 @@ def test_checkout_available_payment_gateways_valid_info_sent(
     checkout_info.database_connection_name = mock.ANY
     mocked_list_gateways.assert_called_with(
         currency=currency,
-        checkout_info=checkout_info,
-        checkout_lines=checkout_lines_info,
+        checkout_info=SameCheckoutInfo(checkout_info),
+        checkout_lines=SameLineInfos(checkout_lines_info),
         channel_slug=channel_slug,
         active_only=True,
     )
@@ -3874,7 +3874,7 @@ def test_query_checkouts_do_not_trigger_sync_tax_webhooks(
         allow_sync_webhooks=False,
         database_connection_name=mock.ANY,
         force_update=False,
-        lines=lines,
+        lines=SameLineInfos(lines),
         manager=mock.ANY,
         requestor=staff_api_client.user,
     )
@@ -3916,7 +3916,7 @@ def test_query_checkouts_calculate_flat_taxes(
     mocked_update_order_prices_with_flat_rates.assert_called_once_with(
         checkout_with_item,
         mock.ANY,
-        lines,
+        SameLineInfos(lines),
         tax_configuration_flat_rates.prices_entered_with_tax,
         database_connection_name=mock.ANY,
     )
@@ -3925,7 +3925,7 @@ def test_query_checkouts_calculate_flat_taxes(
         allow_sync_webhooks=False,
         database_connection_name=mock.ANY,
         force_update=False,
-        lines=lines,
+        lines=SameLineInfos(lines),
         manager=mock.ANY,
         requestor=staff_api_client.user,
     )
@@ -4020,7 +4020,7 @@ def test_query_checkout_lines_do_not_trigger_sync_tax_webhooks(
         allow_sync_webhooks=False,
         database_connection_name=mock.ANY,
         force_update=False,
-        lines=lines,
+        lines=SameLineInfos(lines),
         manager=mock.ANY,
         requestor=staff_api_client.user,
     )
@@ -4058,7 +4058,7 @@ def test_query_checkout_lines_calculate_flat_taxes(
     mocked_update_order_prices_with_flat_rates.assert_called_once_with(
         checkout_with_item,
         mock.ANY,
-        lines,
+        SameLineInfos(lines),
         tax_configuration_flat_rates.prices_entered_with_tax,
         database_connection_name=mock.ANY,
     )
@@ -4067,7 +4067,7 @@ def test_query_checkout_lines_calculate_flat_taxes(
         allow_sync_webhooks=False,
         database_connection_name=mock.ANY,
         force_update=False,
-        lines=lines,
+        lines=SameLineInfos(lines),
         manager=mock.ANY,
         requestor=staff_api_client.user,
     )

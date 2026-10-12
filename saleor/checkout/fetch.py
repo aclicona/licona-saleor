@@ -50,7 +50,8 @@ if TYPE_CHECKING:
     from ..tax.models import TaxClass, TaxConfiguration
 
 
-@dataclass
+# B-1232: eq=False => igualdad/hash por identidad (ver UPGRADE_NOTES.md).
+@dataclass(eq=False)
 class CheckoutLineInfo(LineInfo):
     line: "CheckoutLine"
     variant: "ProductVariant"

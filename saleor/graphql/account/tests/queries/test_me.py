@@ -16,6 +16,7 @@ from .....payment.interface import (
     PaymentMethodData,
 )
 from .....tax.calculations.order import update_order_prices_with_flat_rates
+from .....tests.utils import SameLineInfos
 from ....payment.enums import TokenizedPaymentFlowEnum
 from ....tests.utils import assert_no_permission, get_graphql_content
 
@@ -200,7 +201,7 @@ def test_me_query_checkouts_do_not_trigger_sync_tax_webhooks(
         allow_sync_webhooks=False,
         database_connection_name=mock.ANY,
         force_update=False,
-        lines=lines,
+        lines=SameLineInfos(lines),
         manager=mock.ANY,
         requestor=user,
     )
@@ -243,7 +244,7 @@ def test_me_query_checkouts_calculate_flat_taxes(
     mocked_update_order_prices_with_flat_rates.assert_called_once_with(
         checkout_with_item,
         mock.ANY,
-        lines,
+        SameLineInfos(lines),
         tax_configuration_flat_rates.prices_entered_with_tax,
         database_connection_name=mock.ANY,
     )
@@ -252,7 +253,7 @@ def test_me_query_checkouts_calculate_flat_taxes(
         allow_sync_webhooks=False,
         database_connection_name=mock.ANY,
         force_update=False,
-        lines=lines,
+        lines=SameLineInfos(lines),
         manager=mock.ANY,
         requestor=user,
     )

@@ -28,6 +28,7 @@ from .....discount import RewardValueType
 from .....plugins.manager import get_plugins_manager
 from .....product.models import ProductChannelListing, ProductVariantChannelListing
 from .....tests import race_condition
+from .....tests.utils import SameLineInfos
 from .....warehouse.models import Reservation, Stock
 from .....webhook.event_types import WebhookEventAsyncType
 from .....webhook.transport.asynchronous.transport import send_webhook_request_async
@@ -130,7 +131,7 @@ def test_checkout_lines_update(
     manager = get_plugins_manager(allow_replica=False)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_mark_shipping_methods_as_stale.assert_called_once_with(
-        checkout_info.checkout, lines
+        checkout_info.checkout, SameLineInfos(lines)
     )
     assert checkout.last_change != previous_last_change
     assert mocked_invalidate_checkout.call_count == 1
@@ -209,7 +210,7 @@ def test_checkout_lines_update_when_checkout_has_line_without_listing(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_mark_shipping_methods_as_stale.assert_called_once_with(
-        checkout_info.checkout, lines
+        checkout_info.checkout, SameLineInfos(lines)
     )
     assert checkout.last_change != previous_last_change
     assert mocked_invalidate_checkout.call_count == 1
@@ -255,7 +256,7 @@ def test_checkout_lines_update_using_line_id(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_mark_shipping_methods_as_stale.assert_called_once_with(
-        checkout_info.checkout, lines
+        checkout_info.checkout, SameLineInfos(lines)
     )
     assert checkout.last_change != previous_last_change
 
@@ -304,7 +305,7 @@ def test_checkout_lines_update_using_line_id_and_variant_id(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_mark_shipping_methods_as_stale.assert_called_once_with(
-        checkout_info.checkout, lines
+        checkout_info.checkout, SameLineInfos(lines)
     )
     assert checkout.last_change != previous_last_change
 
@@ -423,7 +424,7 @@ def test_checkout_lines_update_only_stock_in_cc_warehouse(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_mark_shipping_methods_as_stale.assert_called_once_with(
-        checkout_info.checkout, lines
+        checkout_info.checkout, SameLineInfos(lines)
     )
     assert checkout.last_change != previous_last_change
 

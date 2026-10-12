@@ -78,7 +78,8 @@ def fetch_order_lines(order: "Order") -> list[OrderLineInfo]:
     return lines_info
 
 
-@dataclass
+# B-1232: eq=False => igualdad/hash por identidad (ver UPGRADE_NOTES.md).
+@dataclass(eq=False)
 class EditableOrderLineInfo(LineInfo):
     line: "OrderLine"
     discounts: list["OrderLineDiscount"]

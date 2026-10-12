@@ -25,6 +25,7 @@ from .....discount import RewardType, RewardValueType
 from .....plugins.manager import get_plugins_manager
 from .....product.models import ProductChannelListing, ProductVariantChannelListing
 from .....tests import race_condition
+from .....tests.utils import SameLineInfos
 from .....warehouse import WarehouseClickAndCollectOption
 from .....warehouse.models import Reservation, Stock
 from .....warehouse.tests.utils import get_available_quantity_for_stock
@@ -142,7 +143,7 @@ def test_checkout_lines_add(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_mark_shipping_methods_as_stale.assert_called_once_with(
-        checkout_info.checkout, lines
+        checkout_info.checkout, SameLineInfos(lines)
     )
     assert checkout.last_change != previous_last_change
     assert mocked_invalidate_checkout.call_count == 1
@@ -214,7 +215,7 @@ def test_checkout_lines_add_when_checkout_has_line_without_listing(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_mark_shipping_methods_as_stale.assert_called_once_with(
-        checkout_info.checkout, lines
+        checkout_info.checkout, SameLineInfos(lines)
     )
     assert checkout.last_change != previous_last_change
     assert mocked_invalidate_checkout.call_count == 1
@@ -335,7 +336,7 @@ def test_add_to_existing_line_with_sale_when_checkout_has_voucher(
     )
 
     mocked_mark_shipping_methods_as_stale.assert_called_once_with(
-        checkout_info.checkout, lines
+        checkout_info.checkout, SameLineInfos(lines)
     )
 
 
@@ -969,7 +970,7 @@ def test_checkout_lines_add_only_stock_in_cc_warehouse(
     manager = get_plugins_manager(allow_replica=False)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_mark_shipping_methods_as_stale.assert_called_once_with(
-        checkout_info.checkout, lines
+        checkout_info.checkout, SameLineInfos(lines)
     )
     assert checkout.last_change != previous_last_change
 

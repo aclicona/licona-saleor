@@ -27,6 +27,7 @@ from .....core.models import EventDelivery
 from .....plugins.manager import get_plugins_manager
 from .....shipping import models as shipping_models
 from .....shipping.interface import ExcludedShippingMethod
+from .....tests.utils import SameCheckoutInfo
 from .....webhook.event_types import WebhookEventAsyncType, WebhookEventSyncType
 from ....core.utils import to_global_id_or_none
 from ....tests.utils import get_graphql_content
@@ -97,7 +98,7 @@ def test_checkout_shipping_method_update(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mock_get_or_fetch_checkout_deliveries.assert_called_once_with(
-        checkout_info, requestor=staff_api_client.user
+        SameCheckoutInfo(checkout_info), requestor=staff_api_client.user
     )
     errors = data["errors"]
     assert not errors
@@ -150,7 +151,7 @@ def test_checkout_shipping_method_update_not_valid_shipping_method(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mock_get_or_fetch_checkout_deliveries.assert_called_once_with(
-        checkout_info, requestor=staff_api_client.user
+        SameCheckoutInfo(checkout_info), requestor=staff_api_client.user
     )
     errors = data["errors"]
     assert len(errors) == 1

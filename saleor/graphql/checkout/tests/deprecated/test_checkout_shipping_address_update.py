@@ -5,6 +5,7 @@ import graphene
 from .....checkout.error_codes import CheckoutErrorCode
 from .....checkout.fetch import fetch_checkout_info, fetch_checkout_lines
 from .....plugins.manager import get_plugins_manager
+from .....tests.utils import SameLineInfos
 from ....tests.utils import get_graphql_content
 from ...mutations.utils import mark_checkout_deliveries_as_stale_if_needed
 
@@ -69,7 +70,9 @@ def test_checkout_shipping_address_update_by_id(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    mocked_update_shipping_method.assert_called_once_with(checkout_info.checkout, lines)
+    mocked_update_shipping_method.assert_called_once_with(
+        checkout_info.checkout, SameLineInfos(lines)
+    )
 
 
 @mock.patch(
@@ -115,7 +118,9 @@ def test_checkout_shipping_address_update_by_token(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    mocked_update_shipping_method.assert_called_once_with(checkout_info.checkout, lines)
+    mocked_update_shipping_method.assert_called_once_with(
+        checkout_info.checkout, SameLineInfos(lines)
+    )
 
 
 def test_checkout_shipping_address_update_neither_token_and_id_given(

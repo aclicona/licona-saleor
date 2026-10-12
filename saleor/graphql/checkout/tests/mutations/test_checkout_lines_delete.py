@@ -13,6 +13,7 @@ from .....checkout.utils import invalidate_checkout
 from .....core.models import EventDelivery
 from .....plugins.manager import get_plugins_manager
 from .....product.models import ProductChannelListing, ProductVariantChannelListing
+from .....tests.utils import SameLineInfos
 from .....webhook.event_types import WebhookEventAsyncType
 from ....core.utils import to_global_id_or_none
 from ....tests.utils import get_graphql_content
@@ -85,7 +86,7 @@ def test_checkout_lines_delete(
     manager = get_plugins_manager(allow_replica=False)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_mark_shipping_methods_as_stale.assert_called_once_with(
-        checkout_info.checkout, lines
+        checkout_info.checkout, SameLineInfos(lines)
     )
     assert checkout.last_change != previous_last_change
     assert mocked_invalidate_checkout.call_count == 1
@@ -151,7 +152,7 @@ def test_checkout_lines_delete_when_line_without_channel_listing(
     manager = get_plugins_manager(allow_replica=False)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_mark_shipping_methods_as_stale.assert_called_once_with(
-        checkout_info.checkout, lines
+        checkout_info.checkout, SameLineInfos(lines)
     )
     assert checkout.last_change != previous_last_change
     assert mocked_invalidate_checkout.call_count == 1
@@ -218,7 +219,7 @@ def test_checkout_lines_delete_when_checkout_has_variant_without_channel_listing
     manager = get_plugins_manager(allow_replica=False)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_mark_shipping_methods_as_stale.assert_called_once_with(
-        checkout_info.checkout, lines
+        checkout_info.checkout, SameLineInfos(lines)
     )
     assert checkout.last_change != previous_last_change
     assert mocked_invalidate_checkout.call_count == 1

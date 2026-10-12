@@ -131,7 +131,9 @@ def test_remove_line_infos_by_identity_keeps_equal_line_info(
     assert len(lines_info) == 2
     info_a = next(info for info in lines_info if info.line.pk == line_a.pk)
     info_b = next(info for info in lines_info if info.line.pk == line_b.pk)
-    assert info_a == info_b
+    # B-1232: las infos ya no comparan por contenido; las líneas subyacentes sí
+    assert info_a.line == info_b.line
+    assert info_a != info_b
 
     # when
     _remove_line_infos_by_identity(lines_info, [info_b])

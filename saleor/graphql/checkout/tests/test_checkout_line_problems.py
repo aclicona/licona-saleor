@@ -7,6 +7,7 @@ from django.utils import timezone
 from ....checkout.calculations import _fetch_checkout_prices_if_expired
 from ....checkout.fetch import fetch_checkout_lines
 from ....product.models import ProductChannelListing, ProductVariantChannelListing
+from ....tests.utils import SameLineInfos
 from ...core.utils import to_global_id_or_none
 from ...tests.utils import get_graphql_content
 
@@ -606,7 +607,7 @@ def test_query_checkouts_do_not_trigger_sync_tax_webhooks_when_variant_not_avail
         allow_sync_webhooks=False,
         database_connection_name=mock.ANY,
         force_update=False,
-        lines=lines,
+        lines=SameLineInfos(lines),
         manager=mock.ANY,
         requestor=staff_api_client.user,
     )
@@ -654,7 +655,7 @@ def test_query_checkouts_calculate_flat_taxes_when_variant_not_available(
     mocked_update_order_prices_with_flat_rates.assert_called_once_with(
         checkout_with_item,
         mock.ANY,
-        lines,
+        SameLineInfos(lines),
         tax_configuration_flat_rates.prices_entered_with_tax,
         database_connection_name=mock.ANY,
     )
@@ -713,7 +714,7 @@ def test_query_checkouts_do_not_trigger_sync_tax_webhooks_when_out_of_stock(
         allow_sync_webhooks=False,
         database_connection_name=mock.ANY,
         force_update=False,
-        lines=lines,
+        lines=SameLineInfos(lines),
         manager=mock.ANY,
         requestor=staff_api_client.user,
     )
@@ -767,7 +768,7 @@ def test_query_checkouts_calculate_flat_taxes_when_variant_out_of_stock(
     mocked_update_order_prices_with_flat_rates.assert_called_once_with(
         checkout_with_item,
         mock.ANY,
-        lines,
+        SameLineInfos(lines),
         tax_configuration_flat_rates.prices_entered_with_tax,
         database_connection_name=mock.ANY,
     )

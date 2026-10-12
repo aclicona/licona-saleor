@@ -22,6 +22,7 @@ from .....checkout.utils import (
 from .....core.models import EventDelivery
 from .....plugins.manager import get_plugins_manager
 from .....product.models import ProductChannelListing, ProductVariantChannelListing
+from .....tests.utils import SameLineInfos
 from .....warehouse.models import Reservation
 from .....webhook.event_types import WebhookEventAsyncType
 from ....core.utils import to_global_id_or_none
@@ -224,7 +225,7 @@ def test_checkout_line_delete_when_checkout_has_line_without_channel_listing(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_mark_shipping_method_as_stale.assert_called_once_with(
-        checkout_info.checkout, lines
+        checkout_info.checkout, SameLineInfos(lines)
     )
     assert checkout.last_change != previous_last_change
     assert mocked_invalidate_checkout.call_count == 1

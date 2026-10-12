@@ -9,6 +9,7 @@ from freezegun import freeze_time
 from ....checkout.fetch import fetch_checkout_info, fetch_checkout_lines
 from ....checkout.utils import invalidate_checkout
 from ....plugins.manager import get_plugins_manager
+from ....tests.utils import SameCheckoutInfo, SameLineInfos
 from ...tests.utils import get_graphql_content
 
 ADD_CHECKOUT_LINES = """
@@ -53,7 +54,7 @@ def test_checkout_lines_add_invalidate_prices(
     lines, _ = fetch_checkout_lines(checkout_with_items)
     checkout_info = fetch_checkout_info(checkout_with_items, lines, manager)
     mocked_invalidate_checkout.assert_called_once_with(
-        checkout_info, lines, mock.ANY, save=False
+        SameCheckoutInfo(checkout_info), SameLineInfos(lines), mock.ANY, save=False
     )
 
 
@@ -101,7 +102,7 @@ def test_checkout_lines_update_invalidate_prices(
     lines, _ = fetch_checkout_lines(checkout_with_items)
     checkout_info = fetch_checkout_info(checkout_with_items, lines, manager)
     mocked_invalidate_checkout.assert_called_once_with(
-        checkout_info, lines, mock.ANY, save=False
+        SameCheckoutInfo(checkout_info), SameLineInfos(lines), mock.ANY, save=False
     )
 
 
@@ -143,7 +144,7 @@ def test_checkout_lines_delete_invalidate_prices(
     lines, _ = fetch_checkout_lines(checkout_with_items)
     checkout_info = fetch_checkout_info(checkout_with_items, lines, manager)
     mocked_invalidate_checkout.assert_called_once_with(
-        checkout_info, lines, mock.ANY, save=False
+        SameCheckoutInfo(checkout_info), SameLineInfos(lines), mock.ANY, save=False
     )
 
 
@@ -185,7 +186,7 @@ def test_checkout_line_delete_invalidate_prices(
     lines, _ = fetch_checkout_lines(checkout_with_items)
     checkout_info = fetch_checkout_info(checkout_with_items, lines, manager)
     mocked_invalidate_checkout.assert_called_once_with(
-        checkout_info, lines, mock.ANY, save=False
+        SameCheckoutInfo(checkout_info), SameLineInfos(lines), mock.ANY, save=False
     )
 
 
@@ -231,7 +232,7 @@ def test_checkout_shipping_address_update_invalidate_prices(
     lines, _ = fetch_checkout_lines(checkout_with_items)
     checkout_info = fetch_checkout_info(checkout_with_items, lines, manager)
     mocked_invalidate_checkout.assert_called_once_with(
-        checkout_info, lines, mock.ANY, save=False
+        SameCheckoutInfo(checkout_info), SameLineInfos(lines), mock.ANY, save=False
     )
 
 
@@ -275,7 +276,11 @@ def test_checkout_billing_address_update_invalidate_prices(
     lines, _ = fetch_checkout_lines(checkout_with_items)
     checkout_info = fetch_checkout_info(checkout_with_items, lines, manager)
     mocked_function.assert_called_once_with(
-        checkout_info, lines, mock.ANY, recalculate_discount=False, save=False
+        SameCheckoutInfo(checkout_info),
+        SameLineInfos(lines),
+        mock.ANY,
+        recalculate_discount=False,
+        save=False,
     )
 
 

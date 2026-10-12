@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import math
 from decimal import Decimal
@@ -140,3 +141,61 @@ def get_span_by_name(spans: tuple[ReadableSpan, ...], name: str) -> ReadableSpan
     if len(spans) > 1:
         pytest.fail(f"Multiple '{name}' spans")
     return spans[0]
+
+
+class SameLineInfos:
+    """Comparador para `mock.assert_called_with`: infos de línea iguales por contenido.
+
+    B-1232: `LineInfo` y subclases comparan por identidad (`@dataclass(eq=False)`), así
+    que un test que vuelve a hacer `fetch_checkout_lines()` y espera esas líneas en una
+    llamada a un mock ya no puede usar `==` directo. Este comparador exige el mismo
+    número de infos, la misma clase y la misma línea (pk) y el resto de campos iguales
+    uno a uno, es decir, lo que comprobaba el `==` por contenido de antes.
+    """
+
+    def __init__(self, line_infos):
+        self.line_infos = list(line_infos)
+
+    def __eq__(self, other):
+        if not isinstance(other, list | tuple) or len(other) != len(self.line_infos):
+            return False
+        return all(
+            type(expected) is type(actual)
+            and expected.line.pk == actual.line.pk
+            and all(
+                getattr(expected, field.name) == getattr(actual, field.name)
+                for field in dataclasses.fields(expected)
+            )
+            for expected, actual in zip(self.line_infos, other, strict=True)
+        )
+
+    def __repr__(self):
+        return f"SameLineInfos({self.line_infos!r})"
+
+
+class SameCheckoutInfo:
+    """Comparador para `mock.assert_called_with`: `CheckoutInfo` igual por contenido.
+
+    B-1232: `CheckoutInfo.lines` es una lista de `CheckoutLineInfo`, que ya no comparan
+    por contenido; sus campos se comparan uno a uno y `lines` con `SameLineInfos`.
+    """
+
+    def __init__(self, checkout_info):
+        self.checkout_info = checkout_info
+
+    def __eq__(self, other):
+        expected = self.checkout_info
+        if type(expected) is not type(other):
+            return False
+        for field in dataclasses.fields(expected):
+            if not field.compare:
+                continue
+            want, got = getattr(expected, field.name), getattr(other, field.name)
+            if field.name == "lines":
+                want = SameLineInfos(want)
+            if want != got:
+                return False
+        return True
+
+    def __repr__(self):
+        return f"SameCheckoutInfo({self.checkout_info!r})"

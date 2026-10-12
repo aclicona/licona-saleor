@@ -8,6 +8,47 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-1232 — `LineInfo` y sus subclases comparan por identidad: `@dataclass(eq=False)` (2026-10-11)
+
+Cierre de raiz de B-1223 / B-1227 / B-1230. El candado de B-1230 (P3) es una heuristica por NOMBRE de coleccion: una
+coleccion de infos llamada `items`/`infos`/`rest`, `set(lines_info)`, un `dict` con infos como clave o un `==` directo
+entre dos infos lo eluden. En vez de seguir ampliando la heuristica, las clases dejan de comparar por contenido:
+
+- `LineInfo` (`saleor/core/pricing/interface.py`), `CheckoutLineInfo` (`saleor/checkout/fetch.py`) y
+  `EditableOrderLineInfo` (`saleor/order/fetch.py`) pasan de `@dataclass` a `@dataclass(eq=False)`. Una subclase
+  `@dataclass` con eq por defecto REGENERARIA `__eq__`, por eso las tres llevan `eq=False`. `==` y `hash` son los de
+  `object` (identidad): dos infos con contenido igual son distintas y `x in [copia]` es `False`.
+- Antes eran **no hashables** (eq=True sin frozen => `__hash__ = None`); ahora son hashables por identidad (ningun uso
+  de produccion las metia en `set`/`dict`, asi que no cambia nada).
+- `OrderLineInfo` (no hereda de `LineInfo`, campo `line` = `OrderLine` que compara por pk) queda como estaba.
+
+**Inventario (AST, `saleor/` con tests): 0 usos de produccion dependian de la igualdad por contenido.** El unico `==`
+entre infos en produccion es `order/fetch.py` `reattach_apply_once_per_order_voucher_info`
+(`get_the_cheapest_line(lines_info) == initial_cheapest_line_info`), y ambos operandos salen de la MISMA lista
+(`order/calculations.py`: `initial_cheapest_line = get_the_cheapest_line(lines_info)` antes de mutar), asi que la
+identidad es equivalente (y mas correcta). `voucher.py:219` y `promotion.py:442` ya comparaban por `id()`.
+Dependian de la igualdad por contenido solo **tests**, reescritos sin cambiar lo que prueban:
+- ~50 tests (`saleor/graphql/checkout/tests/**`, `saleor/graphql/account/tests/queries/test_me.py`,
+  `saleor/checkout/tests/test_order_from_checkout.py`) hacian `mock.assert_called_with(..., lines)` (o con un
+  `CheckoutInfo`, que lleva `lines`) con lineas vueltas a leer con `fetch_checkout_lines`; ahora pasan
+  `SameLineInfos(lines)` / `SameCheckoutInfo(checkout_info)` (`saleor/tests/utils.py`), que exigen misma clase, misma
+  linea (pk) y el resto de campos iguales uno a uno (lo que comprobaba el `==` anterior).
+- `saleor/checkout/tests/test_line_identity.py`: la precondicion `info_a == info_b` pasa a
+  `info_a.line == info_b.line` y `info_a != info_b`.
+
+**Candado:** `saleor/tests/test_fork_line_info_identity.py` afirma `__dataclass_params__.eq is False` en las tres
+clases, que dos instancias de contenido igual son `!=`, `not in`, no colisionan en `set`/`dict` y `list.remove`
+quita la instancia exacta. Sin base de datos.
+
+**Al hacer merge de upstream:** si el merge revierte alguno de los `eq=False` (p. ej. un conflicto en esas tres
+declaraciones o una subclase nueva con `@dataclass` a secas), `test_fork_line_info_identity.py` falla: reponer
+`eq=False`. Una subclase nueva de `LineInfo` con `@dataclass` a secas tambien hace fallar el test
+(`test_toda_subclase_de_line_info_declara_eq_false` recorre `__subclasses__` de las clases ya importadas).
+`eq=False` es la defensa de raiz; el candado heuristico P1-P3 de B-1223/B-1225/B-1230 NO se retira y queda como
+segunda linea (cubre `CheckoutLine.__eq__`, que sigue comparando por variante + cantidad).
+
+---
+
 ## B-1230 — candado ampliado a colecciones de LineInfo con cualquier operando (2026-10-11)
 
 Seguimiento de B-1227. El candado de B-1225 solo marcaba `x in ys` si `x` se llamaba `line`/`line_info`; un
