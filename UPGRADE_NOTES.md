@@ -1896,3 +1896,21 @@ El último verde fue el 2026-09-30 sobre `70056796eb`; en local la suite sale li
   suite: 60 -> 30.
 - Al re-forkear a una minor nueva: el `conftest.py` y el workflow se copian de upstream; reaplicar el hook si se quiere
   conservar el diagnóstico (es inocuo sin la variable).
+
+## B-1246 — candado contra `on_commit(lambda)` con variable de bucle (2026-10-12)
+
+El mismo bug de upstream (late binding) se arreglo cuatro veces en `saleor/warehouse/management.py`
+(`3ba5f2bef4` B-1236, `2c2d39c7be` B-1238, `da06cea754` B-1243 x2): `transaction.on_commit(lambda: f(x))` con
+`x` ligada por un `for` lee el valor al ejecutarse tras el commit, es decir el ultimo del bucle.
+
+- **Por que no ruff B023:** esta en el `ignore` global (heredado de upstream) y, medido sobre `saleor/` con
+  `ruff check saleor/ --select B023 --isolated` (ruff 0.12.12), hoy tiene 2 hallazgos ajenos
+  (`saleor/graphql/plugins/dataloaders.py:36`, `saleor/plugins/avatax/plugin.py:237`), asi que activarlo obligaria a
+  tocar codigo de upstream o a mantener excepciones.
+- **Candado:** `saleor/core/tests/test_on_commit_late_binding.py` (test AST, sin base de datos, el recorrido es
+  instantaneo; el tiempo de la corrida es el import del conftest). Falla listando `archivo:linea` si un
+  `on_commit(lambda ...)` lee una variable ligada por un `for`/`async for`/comprehension envolvente (target o nombre
+  asignado en el cuerpo del bucle). Excluye `migrations/` y tests. Un parametro por defecto (`lambda s=s: ...`) o
+  `functools.partial` no se marcan.
+- **Verificado:** verde sobre `da06cea754`; revertir cualquiera de los 4 `partial` a `lambda` lo pone en rojo.
+- Solo cubre `on_commit`; otros callbacks diferidos (`apply_async` con lambda, etc.) no.
