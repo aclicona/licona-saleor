@@ -138,6 +138,29 @@ Se recomienda abrir un issue upstream: eliminar los `__eq__/__ne__/__hash__` leg
 
 ---
 
+## B-1236 — `allocate_stocks`: el aviso de agotado usaba siempre el ultimo stock (late-binding) (2026-10-12)
+
+`saleor/warehouse/management.py` (`allocate_stocks`, bucle `for allocation in allocations`): el callback de
+`transaction.on_commit` era `lambda: trigger_product_variant_out_of_stock(allocation.stock, ...)`. El lambda lee
+`allocation` al ejecutarse (tras el commit), cuando el bucle ya termino, asi que si dos stocks distintos se agotaban en la
+misma llamada, el evento `PRODUCT_VARIANT_OUT_OF_STOCK` se emitia dos veces con el stock de la ULTIMA asignacion y el
+otro stock nunca recibia el aviso. Es un bug preexistente de upstream (no lo introdujo B-1218). Fix minimo: `partial(
+trigger_product_variant_out_of_stock, allocation.stock, requestor=requestor)`, que fija el stock al registrar el callback.
+
+Test: `test_allocate_stocks_out_of_stock_event_fires_with_each_exhausted_stock`
+(`saleor/warehouse/tests/test_stock_management.py`): dos variantes con un stock cada una, ambos agotados en la misma
+llamada; con el codigo viejo falla (`[1, 1] != [1, 2]`: el mismo stock dos veces). Los tests vecinos
+`..._two_new_allocations_exhaust_stock_with_previous_allocation` y `..._leave_stock_does_not_trigger_out_of_stock`
+fijan el comportamiento de B-1218 (suma agrupada de asignaciones).
+
+Pendiente: conviene reportarlo upstream (saleor/saleor). El mismo patron (`lambda` sobre la variable del bucle) existe en
+`decrease_stock` (`for stock in Stock.objects.filter(...)...: transaction.on_commit(lambda: ...(stock, ...))`); no se ha
+tocado aqui.
+
+**Al hacer merge de upstream:** si upstream ya lo arreglo, retirar el parche y dejar el test.
+
+---
+
 ## B-1218 — `allocate_stocks` sin N+1 al crear el pedido en `checkoutComplete` (2026-10-12)
 
 `saleor/warehouse/management.py` (`allocate_stocks`, bloque posterior a `Allocation.objects.bulk_create`): dos bucles

@@ -1622,6 +1622,173 @@ def test_allocate_stocks_skips_channel_event_when_legacy_flag_enabled(
     mocked_trigger.assert_not_called()
 
 
+def _clone_order_line(order_line, variant):
+    cloned = OrderLine.objects.get(pk=order_line.pk)
+    cloned.pk = None
+    cloned.product_name = variant.product.name
+    cloned.variant_name = variant.name
+    cloned.product_sku = variant.sku
+    cloned.variant = variant
+    cloned.save()
+    return cloned
+
+
+@mock.patch("saleor.warehouse.management.trigger_product_variant_out_of_stock")
+@mock.patch(
+    "saleor.warehouse.channel_stock_availability.trigger_out_of_stock_in_channel_events_for_stocks"
+)
+def test_allocate_stocks_two_new_allocations_exhaust_stock_with_previous_allocation(
+    mocked_channel_trigger,
+    mocked_variant_trigger,
+    order_line,
+    stock,
+    channel_USD,
+    site_settings,
+    django_capture_on_commit_callbacks,
+):
+    # given - 50 units; another order already holds 10; two new lines of the same
+    # variant (20 + 20) take the remaining 40 exactly
+    site_settings.use_legacy_shipping_zone_stock_availability = False
+    site_settings.save(update_fields=["use_legacy_shipping_zone_stock_availability"])
+    stock.quantity = 50
+    stock.quantity_allocated = 10
+    stock.save(update_fields=["quantity", "quantity_allocated"])
+    other_order_line = _clone_order_line(order_line, order_line.variant)
+    Allocation.objects.create(
+        order_line=other_order_line, stock=stock, quantity_allocated=10
+    )
+    line_2 = _clone_order_line(order_line, order_line.variant)
+    lines_data = [
+        OrderLineInfo(line=order_line, variant=order_line.variant, quantity=20),
+        OrderLineInfo(line=line_2, variant=order_line.variant, quantity=20),
+    ]
+
+    # when
+    with django_capture_on_commit_callbacks(execute=True):
+        allocate_stocks(
+            lines_data,
+            COUNTRY_CODE,
+            channel_USD,
+            site_settings=site_settings,
+            requestor=None,
+            calculate_stocks_with_shipping_zones=True,
+        )
+
+    # then
+    stock.refresh_from_db()
+    assert stock.quantity_allocated == 50
+    assert (
+        Allocation.objects.filter(stock=stock).aggregate(s=Sum("quantity_allocated"))[
+            "s"
+        ]
+        == 50
+    )
+    # one variant event per new allocation (both see the stock fully allocated)
+    assert mocked_variant_trigger.call_count == 2
+    for call in mocked_variant_trigger.call_args_list:
+        assert call.args[0].pk == stock.pk
+        assert call.args[0].product_variant_id == order_line.variant.pk
+        assert call.kwargs == {"requestor": None}
+    # one channel event carrying the exhausted stocks
+    mocked_channel_trigger.assert_called_once()
+    fired_stocks, fired_settings = mocked_channel_trigger.call_args.args
+    assert [s.pk for s in fired_stocks] == [stock.pk, stock.pk]
+    assert fired_settings is site_settings
+
+
+@mock.patch("saleor.warehouse.management.trigger_product_variant_out_of_stock")
+@mock.patch(
+    "saleor.warehouse.channel_stock_availability.trigger_out_of_stock_in_channel_events_for_stocks"
+)
+def test_allocate_stocks_two_new_allocations_leave_stock_does_not_trigger_out_of_stock(
+    mocked_channel_trigger,
+    mocked_variant_trigger,
+    order_line,
+    stock,
+    channel_USD,
+    site_settings,
+    django_capture_on_commit_callbacks,
+):
+    # given - 50 units; 10 held by another order; new 20 + 19 leaves 1 available
+    site_settings.use_legacy_shipping_zone_stock_availability = False
+    site_settings.save(update_fields=["use_legacy_shipping_zone_stock_availability"])
+    stock.quantity = 50
+    stock.quantity_allocated = 10
+    stock.save(update_fields=["quantity", "quantity_allocated"])
+    other_order_line = _clone_order_line(order_line, order_line.variant)
+    Allocation.objects.create(
+        order_line=other_order_line, stock=stock, quantity_allocated=10
+    )
+    line_2 = _clone_order_line(order_line, order_line.variant)
+    lines_data = [
+        OrderLineInfo(line=order_line, variant=order_line.variant, quantity=20),
+        OrderLineInfo(line=line_2, variant=order_line.variant, quantity=19),
+    ]
+
+    # when
+    with django_capture_on_commit_callbacks(execute=True):
+        allocate_stocks(
+            lines_data,
+            COUNTRY_CODE,
+            channel_USD,
+            site_settings=site_settings,
+            requestor=None,
+            calculate_stocks_with_shipping_zones=True,
+        )
+
+    # then
+    stock.refresh_from_db()
+    assert stock.quantity_allocated == 49
+    mocked_variant_trigger.assert_not_called()
+    mocked_channel_trigger.assert_not_called()
+
+
+@mock.patch("saleor.warehouse.management.trigger_product_variant_out_of_stock")
+def test_allocate_stocks_out_of_stock_event_fires_with_each_exhausted_stock(
+    mocked_variant_trigger,
+    order_line,
+    order,
+    product,
+    stock,
+    channel_USD,
+    site_settings,
+    django_capture_on_commit_callbacks,
+):
+    # given - two different variants, each in its own stock, both exhausted by the
+    # same call: the deferred on_commit callback must carry the matching stock for
+    # each allocation (not the last one of the loop)
+    variant_2 = product.variants.first()
+    assert variant_2.pk != order_line.variant.pk
+    stock_2 = Stock.objects.get(product_variant=variant_2)
+    for st in (stock, stock_2):
+        st.quantity = 5
+        st.quantity_allocated = 0
+        st.save(update_fields=["quantity", "quantity_allocated"])
+    line_2 = _clone_order_line(order_line, variant_2)
+    lines_data = [
+        OrderLineInfo(line=order_line, variant=order_line.variant, quantity=5),
+        OrderLineInfo(line=line_2, variant=variant_2, quantity=5),
+    ]
+
+    # when
+    with django_capture_on_commit_callbacks(execute=True):
+        allocate_stocks(
+            lines_data,
+            COUNTRY_CODE,
+            channel_USD,
+            site_settings=site_settings,
+            requestor=None,
+            calculate_stocks_with_shipping_zones=True,
+        )
+
+    # then
+    assert mocked_variant_trigger.call_count == 2
+    fired_stock_pks = sorted(
+        c.args[0].pk for c in mocked_variant_trigger.call_args_list
+    )
+    assert fired_stock_pks == sorted([stock.pk, stock_2.pk])
+
+
 @mock.patch(
     "saleor.warehouse.channel_stock_availability.trigger_back_in_stock_in_channel_events_for_stocks"
 )

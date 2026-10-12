@@ -233,9 +233,13 @@ def allocate_stocks(
         for allocation in allocations:
             allocated_stock = allocated_by_stock_id.get(allocation.stock_id) or 0
             if not max(allocation.stock.quantity - allocated_stock, 0):
+                # partial (not lambda): bind this allocation's stock now; a lambda would
+                # read the loop variable at commit time and always see the last one.
                 transaction.on_commit(
-                    lambda: trigger_product_variant_out_of_stock(
-                        allocation.stock, requestor=requestor
+                    partial(
+                        trigger_product_variant_out_of_stock,
+                        allocation.stock,
+                        requestor=requestor,
                     )
                 )
                 out_of_stock_stocks.append(allocation.stock)
