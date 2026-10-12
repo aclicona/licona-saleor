@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import graphene
 import pytest
+from django.db.models import F, Sum
 from graphene import Node
 
 from .....checkout import calculations
@@ -1655,8 +1656,14 @@ def test_complete_checkout_with_out_of_stock_webhook(
 
     response = get_graphql_content(api_client.post_graphql(query, variables))
     assert not response["data"]["checkoutComplete"]["errors"]
+    # B-1255: el aviso debe salir con el stock que el pedido agoto de verdad (allocated ==
+    # quantity), no con el ultimo stock creado. Antes de B-1236 el lambda de on_commit leia la
+    # variable del bucle tras el commit y avisaba siempre de la ultima asignacion.
+    exhausted_stock = Stock.objects.annotate(
+        allocated=Sum("allocations__quantity_allocated")
+    ).get(allocated=F("quantity"))
     product_variant_out_of_stock_webhook_mock.assert_called_once_with(
-        Stock.objects.last(), requestor=api_client.app
+        exhausted_stock, requestor=api_client.app
     )
 
 

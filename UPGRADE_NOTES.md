@@ -1931,3 +1931,19 @@ Seguimiento de B-1246: los 2 hallazgos de ruff B023 que impedian activarlo.
   `dataloaders.py`), reaplicar; `ruff check saleor/ --select B023` debe dar 0 y el test nuevo lo detecta. Los candados
   de B-1246 (`test_on_commit_late_binding.py`) siguen vigentes.
 - Candidato a reportarse upstream (Saleor): el dataloader tiene el bug en `main`.
+
+## B-1255 — test de benchmark del aviso de agotado esperaba el stock equivocado (2026-10-12)
+
+El job «Suite completa» de `ci-fork.yml` estaba rojo desde `3ba5f2bef4` (B-1236) en
+`saleor/graphql/checkout/tests/benchmark/test_checkout_mutations.py::test_complete_checkout_with_out_of_stock_webhook`
+(`Expected: ...Stock object (554)` / `Actual: ...Stock object (552)`).
+
+- **Diagnóstico: el código es correcto, el test codificaba el bug de upstream.** El pedido del test asigna 1, 10, 3 y 5
+  unidades a cuatro stocks de 10; solo el de 10 queda en 0 y es el que ahora avisa. El `lambda` anterior leía `allocation`
+  tras el commit y avisaba siempre de la última asignación del bucle, que coincidía con `Stock.objects.last()`.
+- **Cambio (solo test):** el stock esperado se obtiene por datos (`allocated == quantity`, con `.get()` que falla si hubiera
+  más de uno), sin ids ni `.last()`.
+- **Verificado:** con el `lambda` original en `allocate_stocks` el test vuelve a fallar (esperado el agotado, recibido el último).
+- **En un rebase de upstream:** si upstream no incorpora el `partial` de B-1236, este test fallará al revés; reaplicar ambos
+  juntos (`saleor/warehouse/management.py` + este test). Tras tocar `allocate_stocks`, correr
+  `saleor/graphql/checkout/tests/benchmark/`: los tests de `saleor/warehouse/tests/` no cubren este camino GraphQL.
