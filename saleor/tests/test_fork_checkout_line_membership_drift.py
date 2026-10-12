@@ -1,4 +1,4 @@
-"""Candado contra pertenencia por contenido sobre líneas de checkout (B-1223 / B-1225).
+"""Candado contra pertenencia por contenido sobre líneas de checkout (B-1223 / B-1225 / B-1230).
 
 `CheckoutLine.__eq__` (`saleor/checkout/models.py`) compara solo `variant` y
 `quantity`, y `LineInfo` es un `@dataclass` cuyo `==` delega en ese `__eq__`.
@@ -15,7 +15,13 @@ upstream: recorre con `ast` el código de producción de `saleor/` y marca
 
 - P1: `x in ys` / `x not in ys` con `x` llamado `line`, `*_line`, `line_info` o
   `*_line_info` e `ys` con nombre de colección de líneas;
-- P2: `ys.remove(x)`, `ys.index(x)`, `ys.count(x)` con `ys` de ese tipo.
+- P2: `ys.remove(x)`, `ys.index(x)`, `ys.count(x)` con `ys` de ese tipo;
+- P3 (B-1230): `x in ys` / `x not in ys` con CUALQUIER `x` cuando `ys` es una
+  colección de `LineInfo` (`lines_info`, `*_line_infos`, `order_lines_info`…).
+  `LineInfo`/`CheckoutLineInfo` son `@dataclass` con `eq=True` que delegan en
+  `CheckoutLine.__eq__`; P1 solo miraba el nombre del operando izquierdo, así que
+  `info in lines_info` (o `i`, `item`, `candidate`…) pasaba. P2 ya cubría
+  `lines_info.remove/index/count(x)` por el nombre de la colección.
 
 Si marca un sitio nuevo: compara por pk / `id()`, o añádelo a `LISTA_BLANCA`
 con justificación. Una entrada obsoleta de la lista blanca también falla.
@@ -46,6 +52,8 @@ DERECHA_EXCLUIDA = re.compile(
 )
 DERECHA_EXTRA = {"to_delete", "to_update"}
 METODOS = {"remove", "index", "count"}
+# B-1230: colecciones de LineInfo / CheckoutLineInfo (el operando puede llamarse como sea).
+COLECCION_DE_INFOS = re.compile(r"(^|_)(lines_info|lines?_infos?)(_|$)")
 
 # (ruta relativa a la raíz del repo, línea fuente .strip()) -> justificación
 LISTA_BLANCA = {
@@ -90,6 +98,23 @@ def _es_codigo_de_produccion(ruta: Path) -> bool:
     return not (ruta.name.startswith("test_") or ruta.name == "conftest.py")
 
 
+def _es_coleccion_de_infos(nombre: str | None) -> bool:
+    return (
+        bool(nombre)
+        and bool(COLECCION_DE_INFOS.search(nombre))
+        and not DERECHA_EXCLUIDA.search(nombre)
+    )
+
+
+def _es_aciertos_p3(nodo) -> bool:
+    return (
+        isinstance(nodo, ast.Compare)
+        and len(nodo.ops) == 1
+        and isinstance(nodo.ops[0], ast.In | ast.NotIn)
+        and _es_coleccion_de_infos(_terminal(nodo.comparators[0]))
+    )
+
+
 def _es_aciertos_p1(nodo) -> bool:
     if not (
         isinstance(nodo, ast.Compare)
@@ -123,7 +148,7 @@ def escanear(raiz_saleor: Path) -> set[tuple[str, int, str]]:
         lineas = texto.splitlines()
         relativa = ruta.relative_to(raiz_saleor.parent).as_posix()
         for nodo in ast.walk(ast.parse(texto, filename=str(ruta))):
-            if _es_aciertos_p1(nodo) or _es_aciertos_p2(nodo):
+            if _es_aciertos_p1(nodo) or _es_aciertos_p2(nodo) or _es_aciertos_p3(nodo):
                 codigo = lineas[nodo.lineno - 1].strip()
                 aciertos.add((relativa, nodo.lineno, codigo))
     return aciertos

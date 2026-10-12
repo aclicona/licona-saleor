@@ -8,6 +8,19 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-1230 — candado ampliado a colecciones de LineInfo con cualquier operando (2026-10-11)
+
+Seguimiento de B-1227. El candado de B-1225 solo marcaba `x in ys` si `x` se llamaba `line`/`line_info`; un
+`info in lines_info` (o `item`, `candidate`...) pasaba, y `LineInfo`/`CheckoutLineInfo` (`@dataclass` eq=True) delegan en
+`CheckoutLine.__eq__`. Se anade el patron P3 en `saleor/tests/test_fork_checkout_line_membership_drift.py`: `in`/`not in`
+con CUALQUIER operando izquierdo cuando la coleccion es `lines_info`/`*_line_info(s)`. `.remove/.index/.count` ya estaban
+cubiertos por P2. Produccion actual: 0 aciertos nuevos, lista blanca sin cambios. Mutacion verificada (un `info in
+lines_info` en `saleor/core/` pone el candado en rojo; al retirarlo vuelve a verde). Sigue siendo heuristica por nombre.
+
+**Al hacer merge de upstream:** igual que B-1225: si el candado marca un sitio, comparar por pk / `id()`, no a la lista blanca.
+
+---
+
 ## B-1227 — inventario de __eq__ por contenido y dataclasses comparables (2026-10-11)
 
 Seguimiento de B-1223/B-1225: ¿hay otra clase con igualdad por contenido que cause el mismo bug? Inventario AST de
