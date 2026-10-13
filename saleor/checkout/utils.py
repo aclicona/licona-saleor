@@ -306,12 +306,12 @@ def _get_line_if_exist(line_data, lines_by_ids):
     return None
 
 
-<<<<<<< HEAD
 def _is_same_line_in(line, lines) -> bool:
     # `CheckoutLine.__eq__` compares variant and quantity, so `line in lines` would
     # also match a different line of the same checkout (B-1223). Compare by pk.
     return any(other.pk == line.pk for other in lines)
-=======
+
+
 def _match_lines_data_to_locked_lines(checkout_lines_data, checkout_lines):
     """Point input lines at the lines that exist now that the checkout is locked.
 
@@ -332,7 +332,6 @@ def _match_lines_data_to_locked_lines(checkout_lines_data, checkout_lines):
         # which mirrors the resolution done before the lock was taken.
         if len(matching_lines) == 1:
             line_data.line_id = str(matching_lines[0].pk)
->>>>>>> refs/tags/3.23.41
 
 
 def _append_line_to_update(to_update, to_delete, line_data, replace, line):

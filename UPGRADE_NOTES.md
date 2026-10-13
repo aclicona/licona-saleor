@@ -8,6 +8,19 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-1283 — sync upstream 3.23.41: conflicto en `saleor/checkout/utils.py` (2026-10-13)
+
+El merge de `3.23.41` dejo marcadores en `saleor/checkout/utils.py`: el fork anade `_is_same_line_in` (B-1223,
+pertenencia por pk) y upstream anade `_match_lines_data_to_locked_lines` (apunta las lineas de entrada a las que ya existen
+tras bloquear el checkout; se usa en `create_checkout_lines`/`add_variants_to_checkout`). No se excluyen: **conviven las
+dos funciones**, una tras otra. B-1223 queda intacto (los 3 usos de `_is_same_line_in` en `_append_line_to_update`
+siguen) y el codigo nuevo de upstream no hace `in`/`not in` sobre `CheckoutLine`: indexa por `variant_id` (`defaultdict`).
+Sin ajustes adicionales en otros sitios.
+
+**Al hacer merge de upstream:** si vuelve a chocar en ese bloque, conservar ambas funciones.
+
+---
+
 ## B-1232 — `LineInfo` y sus subclases comparan por identidad: `@dataclass(eq=False)` (2026-10-11)
 
 Cierre de raiz de B-1223 / B-1227 / B-1230. El candado de B-1230 (P3) es una heuristica por NOMBRE de coleccion: una
