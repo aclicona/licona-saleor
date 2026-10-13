@@ -69,12 +69,13 @@ env:
 # sigue teniendo la deriva mientras nadie la arregle.
 #
 # Excepcion: el push que CREA la rama (`github.event.created`) tiene grupo propio,
-# sufijo `-creacion`. Ese run es el unico en `push` que corre ademas linters y smoke
-# de la imagen; con el grupo comun, un segundo push poco despues de crear la rama lo
+# sufijo `-creacion`. Ese run es el unico en `push` que corre ademas el smoke de la
+# imagen; con el grupo comun, un segundo push poco despues de crear la rama lo
 # cancelaria y la verificacion completa del re-fork se perderia en silencio. Con grupo
 # aparte, el run de creacion termina y los pushes posteriores se cancelan solo entre
-# si. (B-666) Desde B-1005 la suite completa corre en TODO push a `stable/*` (ver job
-# `suite`); la cancelacion entre pushes es aceptable: el guard exige solo el HEAD.
+# si. (B-666) Desde B-1005 la suite completa y desde B-1270 los linters corren en TODO
+# push a `stable/*` (ver jobs `suite` y `linters`); la cancelacion entre pushes es
+# aceptable: el guard exige solo el HEAD.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}${{ github.event.created && '-creacion' || '' }}
   cancel-in-progress: true
@@ -83,9 +84,9 @@ jobs:
   # ---------------------------------------------------------------------------
   # Puerta rapida: lo que un parche 3.22.x rompe de verdad contra los parches locales
   # del fork -- un import roto por un rename upstream, una migracion que falta, deriva
-  # de configuracion. Corre SIEMPRE: en PR, en `alcance: rapido` y en `push` -- donde es
-  # el UNICO job que corre salvo en el push que crea la rama (ver las condiciones de
-  # `linters` y `suite` mas abajo).
+  # de configuracion. Corre SIEMPRE: en PR, en `alcance: rapido` y en `push`. En `push`
+  # corre junto a `linters` y `suite` (B-1270, B-1005); el smoke de la imagen solo corre
+  # en el push que crea la rama y en dispatch `completo` (ver sus condiciones mas abajo).
   #
   # Son SEIS parches locales, no diecinueve: `manage.py`, `saleor/asgi/__init__.py`,
   # `saleor/celeryconf.py`, `pyproject.toml`, la migracion `discount/0052` y el
@@ -183,35 +184,28 @@ jobs:
         run: uv run sh scripts/check-schema-fidelity.sh
 
   # ---------------------------------------------------------------------------
-  # Linters completos via pre-commit. Se salta cuando el dispatch pidio `rapido`.
+  # Linters completos via pre-commit. Corren en PR, en TODO push a `stable/*` y en
+  # dispatch `completo`; solo se saltan cuando el dispatch pidio `rapido`.
+  #
+  # B-1270: antes el job se cortaba en `push` normal (solo corria al crear la rama), asi
+  # que el aviso `[linters-fork]` del worker no podia medir el HEAD y 6 pushes quedaron
+  # sin linters. B-666 (ahorro de minutos) queda superada, igual que en `suite` por
+  # B-1005: el repo es publico (runners gratis) y pre-commit tarda ~5-6 min. La
+  # condicion es la misma que la de `suite`.
   #
   # Sobre la condicion: en un evento `pull_request` el contexto `inputs` esta vacio,
   # asi que `inputs.alcance` es la cadena vacia y `inputs.alcance != 'rapido'` ya
   # daria true. Aun asi se antepone `github.event_name != 'workflow_dispatch'`: la
   # or corta antes de mirar `inputs` en todo evento que no sea dispatch, de modo que
-  # el comportamiento en PR no depende de como GitHub decida poblar (o no) `inputs`
-  # en eventos donde ese contexto no aplica. En PR corren los tres jobs.
-  #
-  # El `github.event_name != 'push'` de delante NO es decorativo: sin el, la condicion
-  # antigua evaluaba TRUE en `push` (no es dispatch, luego la or ya cortaba en true) y
-  # anadir el trigger habria puesto los TRES jobs a correr en cada push -- 20 min de
-  # linters y 60 de suite por commit, lo contrario de lo que se busca. `push` debe
-  # ejecutar solo la puerta, SALVO el push que crea la rama (`github.event.created`:
-  # re-fork o salto de minor), que corre los tres jobs. Motivo (B-666): el re-fork a
-  # 3.23 salio rojo en ruff (76 errores en .semgrep/) en el primer run y la suite
-  # completa dependia de que alguien la disparara a mano. Es un evento raro (una vez
-  # por minor), asi que el coste de 80 min de runner es asumible.
-  #
-  # Los parentesis del segundo termino tampoco son decorativos: en las expresiones de
-  # GitHub `&&` liga mas fuerte que `||`, asi que sin ellos esto seria
-  # `(A && B) || C`, que vuelve a dar true en un dispatch `rapido`.
+  # el comportamiento en PR y en push no depende de como GitHub decida poblar (o no)
+  # `inputs` en eventos donde ese contexto no aplica.
   # ---------------------------------------------------------------------------
   linters:
     name: Linters (pre-commit)
     runs-on: ubuntu-latest
     container: python:3.12
     timeout-minutes: 20
-    if: ${{ (github.event_name != 'push' || github.event.created) && (github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.alcance != 'rapido' }}
 
     steps:
       - uses: actions/checkout@v5
@@ -257,8 +251,8 @@ jobs:
   # tiene el secreto que haria falta) y quitarla ahorra minutos de runner.
   # B-1005: la suite corre en cada push a stable/* porque ci_desplegable.py exige el
   # HEAD exacto; B-666 (ahorro de minutos) queda superada: el repo es publico.
-  # (Antes solo corria en el push que crea la rama, en PR y en dispatch `completo`;
-  # `linters` conserva ese corte.) El dispatch `rapido` sigue sin correrla.
+  # (Antes solo corria en el push que crea la rama, en PR y en dispatch `completo`.)
+  # El dispatch `rapido` sigue sin correrla. `linters` tiene la misma condicion (B-1270).
   # ---------------------------------------------------------------------------
   suite:
     name: Suite completa (17k tests)

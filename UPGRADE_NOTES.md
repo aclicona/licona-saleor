@@ -299,6 +299,27 @@ broker, que construya su propia app/conexion (como el canario), no que reutilice
 
 ---
 
+## B-1270 — los linters corren en cada push a `stable/*` (2026-10-12)
+
+`.github/workflows/ci-fork.yml`: el job `linters` («Linters (pre-commit)», nombre sin cambios) pasa de
+`(push solo si created) && (dispatch solo si alcance != rapido)` a solo `dispatch con alcance != rapido`, la misma condicion
+que `suite`: corre en PR, dispatch `completo` y **todo push a `stable/*`**. Solo `imagen` conserva el corte (push que crea la
+rama). Se corrigieron los comentarios de `puerta`, `concurrency`, `linters` y `suite` que describian el corte anterior.
+
+**Por qué:** con el corte, el aviso `[linters-fork]` del worker no podía medir el HEAD y 6 pushes quedaron sin linters.
+B-666 (ahorro de minutos) queda superada, como ya se declaró para la suite en B-1005: repo público, pre-commit ~5-6 min.
+
+**Primer run con linters en push (run 38335120637, `cdeeb2a96d`): rojo en mypy.** El fix de B-1249 (`6500a992d2`) dejó
+`lambda user=user: user` en `saleor/graphql/plugins/dataloaders.py`, y mypy no infiere el tipo de ese lambda («Cannot infer
+type of lambda»). Entró sin que nadie lo viera justo por el corte que este cambio quita. Arreglo: una función tipada
+`_requestor_getter(requestor) -> Callable[[], Requestor]` crea un getter por requestor. Sigue sin late binding y el test de
+B-1249 sigue en verde. Es un parche local más sobre un archivo de upstream (el mismo que tocó B-1249).
+
+**Conflicto potencial al actualizar upstream:** **ninguno** en `ci-fork.yml` (archivo propio). `dataloaders.py` sí es de
+upstream: si upstream arregla el late binding por su cuenta, quedarse con su versión y comprobar mypy.
+
+---
+
 ## B-1005 — la suite completa corre en cada push a `stable/*` (2026-10-07)
 
 `.github/workflows/ci-fork.yml`: el job `suite` («Suite completa (17k tests)», nombre sin cambios) pasa de
