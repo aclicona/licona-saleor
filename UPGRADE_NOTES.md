@@ -8,6 +8,32 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-1288 — `scripts/check-invalid-indexes.sh`: detectar índices INVALID antes de migrar (2026-10-13)
+
+El sync 3.23.41 trajo migraciones de upstream `atomic = False` con `CREATE UNIQUE INDEX CONCURRENTLY` seguido de
+`ADD CONSTRAINT ... USING INDEX`, sin `IF NOT EXISTS`. Si el pre-deploy de Railway (`migrate --noinput`) se corta entre
+los dos pasos, queda un índice con `indisvalid = false` y TODO despliegue posterior falla con «already exists» sin
+explicar la causa.
+
+- **Qué hace:** `scripts/check-invalid-indexes.sh` consulta `pg_index` + `pg_class` + `pg_namespace` (excluye
+  `pg_catalog`, `information_schema`, `pg_toast`) vía `manage.py shell -c` y **solo lee**: nunca borra. Mismo estilo
+  que `check-migrations.sh` (sh POSIX, `${PYTHON:-python}`, etiqueta `[check-invalid-indexes]`, todo por stdout).
+- **Contrato:** `0` no hay inválidos · `1` los hay (lista `esquema.indice (tabla)` + receta literal
+  `DROP INDEX CONCURRENTLY IF EXISTS "esquema"."indice";` y re-desplegar; avisa de que un `CREATE INDEX CONCURRENTLY`
+  en curso también aparece como inválido) · `2` no se pudo responder (base caída, entorno roto; "no sé", no "hay").
+  Un crash silencioso nunca se lee como 0: el éxito exige la marca `CHECK_DONE`.
+- **Tests:** `scripts/tests/test_check_invalid_indexes.sh` (PYTHON falso, sin Postgres) y
+  `scripts/tests/test_check_invalid_indexes_pg.sh` (Postgres efímero real con un índice INVALID fabricado
+  con `CREATE UNIQUE INDEX CONCURRENTLY` sobre duplicados; hace SKIP si no hay `initdb` o Django).
+- **Cableado PENDIENTE DE ANDRÉS (no hecho a propósito):** el `preDeployCommand` del panel de Railway de `saleor-api`
+  debería pasar a `sh scripts/check-invalid-indexes.sh && python manage.py migrate --noinput`. No se tocó
+  `railway.saleor-*.json` (reflejan el panel; `test_railway_config.sh` y `drift_config.py` se pondrían en rojo). Al
+  cambiar el panel, actualizar el JSON en el mismo paso. Nota: con el `&&`, exit 1 también detiene el despliegue
+  (deseado: obliga a mirar el índice).
+- **Upstream:** archivo nuevo del fork; no choca con ningún merge.
+
+---
+
 ## B-1283 — sync upstream 3.23.41: conflicto en `saleor/checkout/utils.py` (2026-10-13)
 
 El merge de `3.23.41` dejo marcadores en `saleor/checkout/utils.py`: el fork anade `_is_same_line_in` (B-1223,
