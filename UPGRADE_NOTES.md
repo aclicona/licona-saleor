@@ -286,6 +286,20 @@ broker, que construya su propia app/conexion (como el canario), no que reutilice
 
 ---
 
+## B-1270 — los linters corren en cada push a `stable/*` (2026-10-12)
+
+`.github/workflows/ci-fork.yml`: el job `linters` («Linters (pre-commit)», nombre sin cambios) pasa de
+`(push solo si created) && (dispatch solo si alcance != rapido)` a solo `dispatch con alcance != rapido`, la misma condicion
+que `suite`: corre en PR, dispatch `completo` y **todo push a `stable/*`**. Solo `imagen` conserva el corte (push que crea la
+rama). Se corrigieron los comentarios de `puerta`, `concurrency`, `linters` y `suite` que describian el corte anterior.
+
+**Por qué:** con el corte, el aviso `[linters-fork]` del worker no podía medir el HEAD y 6 pushes quedaron sin linters.
+B-666 (ahorro de minutos) queda superada, como ya se declaró para la suite en B-1005: repo público, pre-commit ~5-6 min.
+
+**Conflicto potencial al actualizar upstream:** **ninguno.** `ci-fork.yml` es archivo propio del fork, sin equivalente en upstream.
+
+---
+
 ## B-1005 — la suite completa corre en cada push a `stable/*` (2026-10-07)
 
 `.github/workflows/ci-fork.yml`: el job `suite` («Suite completa (17k tests)», nombre sin cambios) pasa de
