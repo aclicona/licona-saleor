@@ -1,4 +1,5 @@
 from collections import defaultdict
+from collections.abc import Callable
 from functools import partial, wraps
 
 from promise import Promise
@@ -33,11 +34,18 @@ class PluginManagerByRequestorDataloader(DataLoader[Requestor, PluginsManager]):
 
     def batch_load(self, keys):
         allow_replica = getattr(self.context, "allow_replica", True)
-        # `user=user` fija el requestor de cada iteracion: el getter se evalua de forma
-        # perezosa y sin esto todos los managers verian el ultimo requestor del lote (B023).
+        # Un getter por requestor, creado en una funcion aparte: el getter se evalua de
+        # forma perezosa y un `lambda: user` en la comprension haria que todos los
+        # managers vieran el ultimo requestor del lote (B023, B-1249). La funcion
+        # tipada, y no `lambda user=user: user`, es para que mypy infiera el tipo
+        # (B-1270: «Cannot infer type of lambda»).
         return [
-            get_plugins_manager(allow_replica, lambda user=user: user) for user in keys
+            get_plugins_manager(allow_replica, _requestor_getter(user)) for user in keys
         ]
+
+
+def _requestor_getter(requestor: Requestor) -> Callable[[], Requestor]:
+    return lambda: requestor
 
 
 class AnonymousPluginManagerLoader(DataLoader[None, PluginsManager]):
