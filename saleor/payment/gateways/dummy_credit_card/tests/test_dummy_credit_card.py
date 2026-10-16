@@ -26,8 +26,10 @@ CANNOT_CHARGE_MORE_THAN_UNCAPTURED = "Unable to charge more than un-captured amo
 
 
 @pytest.fixture(autouse=True)
-def setup_dummy_credit_card_gateway(settings):
-    DeprecatedDummyCreditCardGatewayPlugin.DEFAULT_ACTIVE = True
+def setup_dummy_credit_card_gateway(settings, monkeypatch):
+    # monkeypatch (y no asignar el atributo de clase) para que DEFAULT_ACTIVE vuelva a
+    # False al terminar el test; si no, contamina a los tests siguientes del mismo worker.
+    monkeypatch.setattr(DeprecatedDummyCreditCardGatewayPlugin, "DEFAULT_ACTIVE", True)
     settings.PLUGINS = [
         "saleor.payment.gateways.dummy_credit_card.plugin.DeprecatedDummyCreditCardGatewayPlugin"
     ]

@@ -8,6 +8,19 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-1234 — fuga de estado: `DeprecatedDummyCreditCardGatewayPlugin.DEFAULT_ACTIVE` quedaba en `True` entre tests (2026-10-16)
+
+El fixture autouse `setup_dummy_credit_card_gateway` de `saleor/payment/gateways/dummy_credit_card/tests/test_dummy_credit_card.py`
+(código de **upstream**, commit `f3c1a9678d` «Deprecate plugins») asignaba `DEFAULT_ACTIVE = True` directamente sobre la
+clase sin restaurarlo. Con `-n 4`, los tests del mismo worker que corrían después veían el gateway `dummy_credit_card`
+activo y `test_checkout_available_payment_gateways` y `..._currency_specified_USD` (`saleor/graphql/checkout/tests/test_checkout.py`)
+fallaban por un gateway de más. Sueltos pasaban.
+
+- **Arreglo:** `monkeypatch.setattr(..., "DEFAULT_ACTIVE", True)` en ese fixture (solo test, sin código de producción).
+- **Al sincronizar upstream:** si el conflicto aparece en ese archivo, conservar el `monkeypatch`; si upstream ya lo corrigió, descartar esta entrada.
+
+---
+
 ## B-1288 — `scripts/check-invalid-indexes.sh`: detectar índices INVALID antes de migrar (2026-10-13)
 
 El sync 3.23.41 trajo migraciones de upstream `atomic = False` con `CREATE UNIQUE INDEX CONCURRENTLY` seguido de
