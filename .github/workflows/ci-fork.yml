@@ -315,6 +315,12 @@ jobs:
             --junitxml=junit/test-results.xml \
             -o junit_family=legacy
 
+      # B-1024: vigila el margen del timeout por test (B-1019, 600 s). Avisa si el mas lento
+      # pasa de la mitad y deja el top 5 en el resumen del job. Nunca rompe el job (exit 0).
+      - name: Vigilar el test mas lento
+        if: always()
+        run: sh scripts/check-slowest-test.sh
+
       - name: Publicar resultados JUnit
         uses: actions/upload-artifact@v4
         if: always()
