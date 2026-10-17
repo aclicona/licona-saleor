@@ -355,3 +355,77 @@ def test_ancla_de_la_regla_del_fork_existe_y_el_guion_la_cita():
     assert ANCLA_REGLA_FORK in GUION.read_text(encoding="utf-8"), (
         f"check-github-settings.sh ya no cita el ancla «{ANCLA_REGLA_FORK}»."
     )
+
+
+# ─── B-1412: workflows registrados por refs heredados de upstream ──────────────
+def _heredados_del_guion() -> list[tuple[str, str]]:
+    """Parsea `WORKFLOWS_HEREDADOS_OTROS_REFS="ruta=ref,..."` del guion.
+
+    Mismo rigor que la lista de propios: ruta exacta `.github/workflows/*.y(a)ml`,
+    `=ref` no vacío, sin `*` ni `${`.
+    """
+    contenido = GUION.read_text(encoding="utf-8")
+    coincidencia = re.search(
+        r'^WORKFLOWS_HEREDADOS_OTROS_REFS="(.*)"$', contenido, re.MULTILINE
+    )
+    assert coincidencia is not None, (
+        f'No encontré una línea `WORKFLOWS_HEREDADOS_OTROS_REFS="..."` en {GUION}.'
+    )
+    valor = coincidencia.group(1)
+    if valor == "":
+        return []
+    pares = []
+    for entrada in valor.split(","):
+        ruta, separador, ref = entrada.partition("=")
+        assert separador == "=", (
+            f"Entrada '{entrada}' de WORKFLOWS_HEREDADOS_OTROS_REFS sin formato ruta=ref."
+        )
+        assert ref.strip(), f"Entrada '{entrada}' con el ref vacío."
+        pares.append((ruta.strip(), ref.strip()))
+    return pares
+
+
+def test_heredados_tienen_formato_de_ruta_exacta_y_ref():
+    for ruta, ref in _heredados_del_guion():
+        assert re.fullmatch(r"\.github/workflows/[^/*$]+\.ya?ml", ruta), (
+            f"'{ruta}' no es una ruta exacta .github/workflows/*.y(a)ml."
+        )
+        for prohibido in ("*", "${"):
+            assert prohibido not in ruta + ref, (
+                f"'{ruta}={ref}' lleva '{prohibido}'; solo se admite ruta exacta."
+            )
+        assert ref, f"'{ruta}' tiene el ref vacío."
+
+
+def test_heredados_no_existen_en_el_arbol():
+    """Un heredado que reaparece en el árbol deja de serlo.
+
+    La lista muere con el hecho (el guion lo señala como
+    `workflows.heredados.entrada_obsoleta`).
+    """
+    for ruta, _ref in _heredados_del_guion():
+        assert not (RAIZ / ruta).exists(), (
+            f"'{ruta}' existe en el árbol del checkout: quítalo de "
+            "WORKFLOWS_HEREDADOS_OTROS_REFS (ya no es un registro heredado de otro ref)."
+        )
+
+
+def test_heredados_y_propios_son_disjuntos():
+    interseccion = {r for r, _ in _heredados_del_guion()} & set(
+        _workflows_propios_del_guion()
+    )
+    assert not interseccion, (
+        f"Rutas a la vez en WORKFLOWS_PROPIOS y WORKFLOWS_HEREDADOS_OTROS_REFS: "
+        f"{sorted(interseccion)}. Un propio vive en el árbol; un heredado, no."
+    )
+
+
+def test_guion_tiene_las_ramas_de_salida_de_heredados():
+    contenido = GUION.read_text(encoding="utf-8")
+    for rama in (
+        "workflows.heredados.entrada_obsoleta",
+        "workflows.heredados.declaracion_falsa",
+    ):
+        assert rama in contenido, (
+            f"check-github-settings.sh ya no tiene la rama '{rama}'."
+        )

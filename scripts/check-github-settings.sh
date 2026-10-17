@@ -28,6 +28,9 @@
 #      árbol en `disabled_manually`/`disabled_inactivity`/`disabled_fork`/
 #      `deleted`. Además cruza la lista de la API contra el árbol de la rama,
 #      EN LAS DOS DIRECCIONES.
+#      Una sola excepción, declarada y verificada: los registrados por refs
+#      heredados de upstream (`WORKFLOWS_HEREDADOS_OTROS_REFS`, B-1412), que salen
+#      como NOTA y solo en la dirección API→árbol.
 #   2. Workflow permissions      · actions/permissions/workflow         → SÍ
 #      `default_workflow_permissions == "read"`.
 #   3. Aprobación de PR de fork  · .../fork-pr-contributor-approval     → NO
@@ -241,6 +244,73 @@ RAMA="${RAMA:-stable/3.23}"
 # caiga fuera de `.github/workflows/`. Si cambias los workflows, cambia también
 # esta línea EN EL MISMO COMMIT.
 WORKFLOWS_PROPIOS=".github/workflows/ci-fork.yml,.github/workflows/security-scan.yml,.github/workflows/sync-upstream.yml,.github/workflows/smoke-imagen.yml"
+
+# Workflows REGISTRADOS en la API de Actions que NO están en el árbol de $RAMA
+# porque viven en OTRO ref (B-1412). Formato `ruta=ref`, separados por coma, ruta
+# EXACTA (sin comodines).
+#
+# MEDIDO el 2026-10-16: `.github/workflows/publish-release-tag.yml` figura `active`
+# en la API de `aclicona/licona-saleor` y no está en `stable/3.23`. Solo existe en
+# la rama `3.22` del fork y en los tags `3.22.*` de upstream que el sync replica
+# (B-540); cada push de uno de esos tags lo dispara (23 runs, todos
+# `startup_failure`, 2026-10-13). Upstream lo borró en 05f9bea02a («fix(build):
+# delete unused workflow (#18780)»). Los tags son inmutables: borrar runs o ramas no
+# lo apaga, y `gh workflow disable` está prohibido por la regla del fork (el estado
+# `disabled` no se clona). Es un hecho de GitHub que el árbol no puede arreglar.
+#
+# Esta lista NO es un silenciador general (dictamen de arquitectura, B-1412):
+#   · solo afecta a `solo_api` (registrado y ausente del árbol); NUNCA a `solo_arbol`.
+#   · solo exime la ruta exacta declarada; cualquier otra sigue siendo DERIVA.
+#   · cada entrada se VERIFICA contra GitHub (existe en ese ref) y MUERE sola: si la
+#     ruta reaparece en el árbol, o GitHub deja de registrarla, es DERIVA
+#     `workflows.heredados.entrada_obsoleta`.
+#   · una ruta no puede estar a la vez aquí y en WORKFLOWS_PROPIOS (exit 2).
+# Se vacía cuando upstream deje de publicar parches 3.22 (ver UPGRADE_NOTES.md, B-1412).
+# `saleor/tests/test_fork_github_settings_drift.py` vigila el formato de esta línea.
+WORKFLOWS_HEREDADOS_OTROS_REFS=".github/workflows/publish-release-tag.yml=3.22"
+
+# Validación de la configuración (exit 2 = error de configuración, no deriva).
+if [ -n "$WORKFLOWS_HEREDADOS_OTROS_REFS" ]; then
+  _CFG=$(printf '%s' "$WORKFLOWS_HEREDADOS_OTROS_REFS" | tr ',' ' ')
+  set -f
+  for ENTRADA_HEREDADA in $_CFG; do
+    RUTA_HEREDADA=${ENTRADA_HEREDADA%%=*}
+    REF_HEREDADO=${ENTRADA_HEREDADA#*=}
+    case "$ENTRADA_HEREDADA" in
+      *=*) ;;
+      *)
+        echo "$ETIQUETA ERROR DE CONFIGURACIÓN: '$ENTRADA_HEREDADA' en WORKFLOWS_HEREDADOS_OTROS_REFS no tiene formato ruta=ref."
+        exit 2
+        ;;
+    esac
+    case "$RUTA_HEREDADA" in
+      .github/workflows/*.yml | .github/workflows/*.yaml) ;;
+      *)
+        echo "$ETIQUETA ERROR DE CONFIGURACIÓN: la ruta '$RUTA_HEREDADA' de WORKFLOWS_HEREDADOS_OTROS_REFS no es .github/workflows/*.yml|yaml."
+        exit 2
+        ;;
+    esac
+    # shellcheck disable=SC2016  # '${' es literal a propósito: se busca el texto, no se expande
+    case "$ENTRADA_HEREDADA" in
+      *'*'* | *'${'*)
+        echo "$ETIQUETA ERROR DE CONFIGURACIÓN: '$ENTRADA_HEREDADA' lleva comodín o expansión; solo se admite ruta exacta."
+        exit 2
+        ;;
+    esac
+    if [ -z "$REF_HEREDADO" ]; then
+      echo "$ETIQUETA ERROR DE CONFIGURACIÓN: '$ENTRADA_HEREDADA' tiene el ref vacío."
+      exit 2
+    fi
+    for RUTA_PROPIA in $(printf '%s' "$WORKFLOWS_PROPIOS" | tr ',' ' '); do
+      if [ "$RUTA_PROPIA" = "$RUTA_HEREDADA" ]; then
+        echo "$ETIQUETA ERROR DE CONFIGURACIÓN: '$RUTA_HEREDADA' está a la vez en WORKFLOWS_PROPIOS y en"
+        echo "$ETIQUETA WORKFLOWS_HEREDADOS_OTROS_REFS. Un workflow propio vive en el árbol; un heredado, NO."
+        exit 2
+      fi
+    done
+  done
+  set +f
+fi
 
 # Los secrets de Actions que los workflows PROPIOS necesitan, además del
 # `GITHUB_TOKEN` que GitHub inyecta solo. HOY ESTÁ VACÍA A PROPÓSITO: ningún
@@ -549,6 +619,64 @@ sort "$TMP/arbol.out" >"$TMP/arbol.sorted"
 comm -23 "$TMP/api.sorted" "$TMP/arbol.sorted" >"$TMP/solo_api.txt"
 comm -13 "$TMP/api.sorted" "$TMP/arbol.sorted" >"$TMP/solo_arbol.txt"
 
+# 1.c.bis — Workflows registrados por refs heredados (B-1412). Ver la constante
+# WORKFLOWS_HEREDADOS_OTROS_REFS para el porqué. Solo toca `solo_api`: la dirección
+# árbol→API (`solo_arbol`) queda intacta.
+: >"$TMP/heredados_rutas.txt"
+: >"$TMP/heredados_ok.txt"
+printf '%s\n' "$WORKFLOWS_HEREDADOS_OTROS_REFS" | tr ',' '\n' | sed '/^$/d' >"$TMP/heredados_cfg.txt"
+while IFS= read -r ENTRADA_HEREDADA; do
+  [ -z "$ENTRADA_HEREDADA" ] && continue
+  RUTA_HEREDADA=${ENTRADA_HEREDADA%%=*}
+  REF_HEREDADO=${ENTRADA_HEREDADA#*=}
+  printf '%s\n' "$RUTA_HEREDADA" >>"$TMP/heredados_rutas.txt"
+  if grep -qxF -- "$RUTA_HEREDADA" "$TMP/arbol.sorted"; then
+    DERIVAS="${DERIVAS}x"
+    echo "$ETIQUETA DERIVA en workflows.heredados.entrada_obsoleta:"
+    echo "$ETIQUETA   '$RUTA_HEREDADA' ya está en el árbol de '$RAMA': deja de ser un registro heredado."
+    echo "$ETIQUETA   Quítalo de WORKFLOWS_HEREDADOS_OTROS_REFS (la lista muere con el hecho)."
+    continue
+  fi
+  if ! grep -qxF -- "$RUTA_HEREDADA" "$TMP/api.sorted"; then
+    DERIVAS="${DERIVAS}x"
+    echo "$ETIQUETA DERIVA en workflows.heredados.entrada_obsoleta:"
+    echo "$ETIQUETA   GitHub ya no lista '$RUTA_HEREDADA' en la API de Actions: la entrada sobra."
+    echo "$ETIQUETA   Quítala de WORKFLOWS_HEREDADOS_OTROS_REFS (la lista muere con el hecho)."
+    continue
+  fi
+  # UNA llamada acotada: ¿el archivo existe de verdad en ese ref? El 404 se decide por
+  # CÓDIGO HTTP (disciplina del guion); cualquier otro fallo es "no sé" (exit 2).
+  gh api "repos/$REPO/contents/$RUTA_HEREDADA?ref=$REF_HEREDADO" --jq '.type' \
+    >"$TMP/heredado.out" 2>"$TMP/heredado.err"
+  CODIGO=$?
+  if [ "$CODIGO" -ne 0 ]; then
+    if grep -qi 'HTTP 404' "$TMP/heredado.err"; then
+      DERIVAS="${DERIVAS}x"
+      echo "$ETIQUETA DERIVA en workflows.heredados.declaracion_falsa:"
+      echo "$ETIQUETA   '$RUTA_HEREDADA' NO existe en el ref '$REF_HEREDADO' de '$REPO'."
+      echo "$ETIQUETA   La declaración no se sostiene: no se exime nada (el registro de la API sigue"
+      echo "$ETIQUETA   siendo una deriva de workflows.cruce_api_vs_arbol)."
+      continue
+    fi
+    diagnosticar_fallo "'$RUTA_HEREDADA' en el ref '$REF_HEREDADO' (contents)" "$TMP/heredado.err" "$CODIGO"
+    exit 2
+  fi
+  if [ "$(sed -n '1p' "$TMP/heredado.out")" != "file" ]; then
+    echo "$ETIQUETA NO SE PUDO RESPONDER: 'contents/$RUTA_HEREDADA?ref=$REF_HEREDADO' respondió 200 pero no es un archivo."
+    exit 2
+  fi
+  printf '%s\n' "$RUTA_HEREDADA" >>"$TMP/heredados_ok.txt"
+  echo "$ETIQUETA NOTA (sin veredicto): '$RUTA_HEREDADA' está registrado en la API pero NO en '$RAMA':"
+  echo "$ETIQUETA   vive en el ref '$REF_HEREDADO' (tags/rama heredados de upstream, que el sync replica)."
+  echo "$ETIQUETA   Upstream lo borró en 05f9bea02a, pero los tags son inmutables: no se apaga con el"
+  echo "$ETIQUETA   árbol. Regla del fork: «Lo que no está en el árbol no existe para la instancia N+1»"
+  echo "$ETIQUETA   (UPGRADE_NOTES.md, B-1412): NO 'gh workflow disable', NO borrar runs; la entrada se"
+  echo "$ETIQUETA   vacía cuando upstream deje de publicar parches $REF_HEREDADO."
+done <"$TMP/heredados_cfg.txt"
+awk 'FILENAME == ARGV[1] {ok[$0] = 1; next} !($0 in ok)' \
+  "$TMP/heredados_ok.txt" "$TMP/solo_api.txt" >"$TMP/solo_api.neto"
+mv "$TMP/solo_api.neto" "$TMP/solo_api.txt"
+
 # 1.d — Los cuatro workflows PROPIOS deben estar en 'active'. Se comprueban
 # aparte del resto del árbol porque su consecuencia concreta es distinta y
 # mucho más cara (ver los textos de abajo).
@@ -594,7 +722,8 @@ set +f
 IFS=$IFS_ORIGINAL
 
 # 1.e — Ninguno de los workflows del ÁRBOL puede estar en un estado
-# deshabilitado. Se excluyen los cuatro propios para no reportarlos dos veces:
+# deshabilitado. Se excluyen los propios y los heredados declarados (B-1412) para no
+# reportarlos dos veces:
 # 1.d ya los cubre con su consecuencia específica.
 while IFS= read -r RUTA_WF; do
   [ -z "$RUTA_WF" ] && continue
@@ -608,6 +737,8 @@ while IFS= read -r RUTA_WF; do
   set +f
   IFS=$IFS_ORIGINAL
   [ "$ES_PROPIO" -eq 1 ] && continue
+  # Los heredados declarados (B-1412) tampoco: su estado no lo decide el árbol.
+  grep -qxF -- "$RUTA_WF" "$TMP/heredados_rutas.txt" && continue
 
   ESTADO_WF=$(awk -F'\t' -v r="$RUTA_WF" '$1 == r {print $2}' "$TMP/pares.tsv")
   if [ "$ESTADO_WF" != "active" ]; then
@@ -656,6 +787,9 @@ else
   echo "$ETIQUETA 'active'; cuadran exactamente con los $LINEAS_ARBOL archivos .yml/.yaml de la"
   echo "$ETIQUETA rama '$RAMA' (cruce sin delta en ninguna de las dos direcciones), y los cuatro"
   echo "$ETIQUETA workflows propios están registrados y activos."
+  if [ -s "$TMP/heredados_ok.txt" ]; then
+    echo "$ETIQUETA De esos registros, $(awk 'END {print NR+0}' "$TMP/heredados_ok.txt") viven en otro ref y NO están en el árbol (NOTA, no deriva) — ver arriba."
+  fi
 fi
 
 # Se informa SIEMPRE (haya derivas o no): quien lea la salida tiene que poder

@@ -1935,6 +1935,27 @@ Lo que sí hay que repetir a mano es el **re-fork a una minor nueva** (copia el 
 estos 15 (o partir de `stable/3.23`). Ningún workflow restante referencia uno borrado (`ci-fork.yml` solo llama al
 nuevo `smoke-imagen.yml`).
 
+### B-1412 — workflows registrados por refs heredados de upstream (2026-10-16)
+
+`scripts/check-github-settings.sh` salía exit 1 por `workflows.cruce_api_vs_arbol`: `publish-release-tag.yml` figura
+`active` en la API de `aclicona/licona-saleor` y no está en el árbol de `stable/3.23`. **Medido:** solo existe en la
+rama `3.22` del fork y en los tags `3.22.*` de upstream que el sync replica (B-540); cada push de uno de esos tags lo
+dispara (23 runs, todos `startup_failure`, 2026-10-13). Upstream lo borró en `05f9bea02a` («fix(build): delete unused
+workflow (#18780)»), pero los tags son inmutables.
+
+Es una **categoría nueva, «registrado por refs heredados»**: ni propio (vive en el árbol) ni borrado (GitHub lo sigue
+registrando). Dictamen de arquitectura (Fable): constante `WORKFLOWS_HEREDADOS_OTROS_REFS` en el guion, formato
+`ruta=ref`, ruta exacta. Solo exime la dirección API→árbol y solo esa ruta (sale como NOTA); `solo_arbol` no se toca.
+Cada entrada se verifica con una llamada a `contents/<ruta>?ref=<ref>`: si el archivo no está en ese ref →
+`workflows.heredados.declaracion_falsa`; si reaparece en el árbol o GitHub deja de registrarlo →
+`workflows.heredados.entrada_obsoleta` (la lista muere con el hecho). Una ruta no puede estar a la vez en
+`WORKFLOWS_PROPIOS` y aquí (exit 2). Test sin red: `saleor/tests/test_fork_github_settings_drift.py`.
+
+**Qué NO es la solución:** `gh workflow disable` (prohibido por la regla: «Lo que no está en el árbol no existe para la
+instancia N+1»; el estado `disabled` no se clona) ni borrar runs o la rama `3.22` (los tags `3.22.*` siguen disparándolo).
+**La lista se vacía** cuando upstream deje de publicar parches 3.22 (o cuando se retire de la API); entonces la propia
+entrada saltará como `entrada_obsoleta`.
+
 ## B-911 — smoke de la imagen Docker (2026-10-06)
 
 `scripts/smoke-imagen.sh <imagen>` levanta un Postgres efímero y comprueba con la imagen real: el ENTRYPOINT no
