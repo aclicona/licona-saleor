@@ -12,8 +12,8 @@ repositorio:
   ningún workflow propio usa un secret distinto de `GITHUB_TOKEN` (el token efímero
   que GitHub inyecta solo, no un secret configurado a mano).
 
-Ambas constantes están ACOPLADAS al contenido real de los tres workflows propios
-(`ci-fork.yml`, `security-scan.yml`, `sync-upstream.yml`). Si alguien borra un
+Ambas constantes están ACOPLADAS al contenido real de los cuatro workflows propios
+(`ci-fork.yml`, `security-scan.yml`, `sync-upstream.yml`, `smoke-imagen.yml`). Si alguien borra un
 workflow del árbol, añade un `secrets.ALGO` nuevo, o quita el bloque `permissions:`
 de un job, y no toca el guion (o el workflow) en el mismo commit, las dos fuentes se
 separan en silencio: nada en CI avisa, porque nada más lee estas dos constantes.
@@ -186,8 +186,8 @@ def test_workflows_esperados_declaran_bloque_permissions():
     (`contents: read`, `actions: write`); `security-scan.yml` lo declara en su único
     job `trivy` (`contents: read`, `security-events: write`); `sync-upstream.yml` lo
     declara en sus dos jobs, `sync` (`contents: write`, `pull-requests: write`,
-    `actions: write`) y `check-new-minor` (`contents: read`, `issues: write`). Nada en
-    la CI protege ese bloque.
+    `actions: write`) y `check-new-minor` (`contents: read`, `issues: write`); `smoke-imagen.yml` lo declara a nivel raíz
+    (`contents: read`, líneas 25-26). Nada en la CI protege ese bloque.
 
     Si alguien lo borra, el workflow no queda sin permisos: cae al ajuste de repo NO
     versionado "Workflow permissions" (Settings → Actions → General), en silencio.

@@ -1336,6 +1336,12 @@ editando la constante. Ruling de Fable del 2026-09-26, literal:
 > (`bump-dependencies.yml`, `create-tag-with-release-pr.yml`) no las usa el fork, y que dejen de
 > disparar con permisos que nadie les concedió es consecuencia deseable, no avería.
 
+> **B-946 (2026-10-16):** `smoke-imagen.yml` entra en `WORKFLOWS_PROPIOS` (ahora son cuatro). Antes no podía:
+> GitHub no registra un workflow hasta que corre una vez, y 1.d habría exigido el `active` de algo ausente de la
+> API. Ya corrió (run 37458309142, dispatch, verde) y GitHub lo registró `active`. Declara `permissions:
+> contents: read` a nivel raíz (líneas 25-26), así que es inmune igual que los otros tres. El texto de arriba
+> es el ruling de 2026-09-26, literal, cuando eran tres.
+
 La inmunidad de los tres workflows propios está **medida**, no supuesta: `ci-fork.yml:26-28`,
 `sync-upstream.yml:47-61` y `:557-559`, y `security-scan.yml:12-14` declaran su `permissions:` por
 job, así que el ajuste de repo no los alcanza. En el mismo turno se corrigió la REGLA DEL FORK en

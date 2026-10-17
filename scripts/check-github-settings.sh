@@ -24,7 +24,7 @@
 #
 # ─── Los cuatro ajustes, y cuál puede dar exit 1 ─────────────────────────────
 #   1. Workflows deshabilitados  · actions/workflows                    → SÍ
-#      Los tres workflows propios en `state: active`, y ninguno de los del
+#      Los cuatro workflows propios en `state: active`, y ninguno de los del
 #      árbol en `disabled_manually`/`disabled_inactivity`/`disabled_fork`/
 #      `deleted`. Además cruza la lista de la API contra el árbol de la rama,
 #      EN LAS DOS DIRECCIONES.
@@ -231,7 +231,7 @@ fi
 REPO="${REPO:-aclicona/licona-saleor}"
 RAMA="${RAMA:-stable/3.23}"
 
-# Los tres workflows PROPIOS del fork (no existen en upstream). Esta lista está
+# Los cuatro workflows PROPIOS del fork (no existen en upstream). Esta lista está
 # ACOPLADA a los archivos reales de `.github/workflows/`: si alguien borra o
 # renombra uno y no toca esta línea, el guion exigirá para siempre el
 # `state: active` de algo que ya no existe — un exit 1 INARREGLABLE, porque no
@@ -240,7 +240,7 @@ RAMA="${RAMA:-stable/3.23}"
 # verifica que cada ruta de aquí siga existiendo en el árbol y que ninguna
 # caiga fuera de `.github/workflows/`. Si cambias los workflows, cambia también
 # esta línea EN EL MISMO COMMIT.
-WORKFLOWS_PROPIOS=".github/workflows/ci-fork.yml,.github/workflows/security-scan.yml,.github/workflows/sync-upstream.yml"
+WORKFLOWS_PROPIOS=".github/workflows/ci-fork.yml,.github/workflows/security-scan.yml,.github/workflows/sync-upstream.yml,.github/workflows/smoke-imagen.yml"
 
 # Los secrets de Actions que los workflows PROPIOS necesitan, además del
 # `GITHUB_TOKEN` que GitHub inyecta solo. HOY ESTÁ VACÍA A PROPÓSITO: ningún
@@ -549,7 +549,7 @@ sort "$TMP/arbol.out" >"$TMP/arbol.sorted"
 comm -23 "$TMP/api.sorted" "$TMP/arbol.sorted" >"$TMP/solo_api.txt"
 comm -13 "$TMP/api.sorted" "$TMP/arbol.sorted" >"$TMP/solo_arbol.txt"
 
-# 1.d — Los tres workflows PROPIOS deben estar en 'active'. Se comprueban
+# 1.d — Los cuatro workflows PROPIOS deben estar en 'active'. Se comprueban
 # aparte del resto del árbol porque su consecuencia concreta es distinta y
 # mucho más cara (ver los textos de abajo).
 # La búsqueda del estado se hace con `awk -F'\t'`, no con un `read` de shell con
@@ -594,7 +594,7 @@ set +f
 IFS=$IFS_ORIGINAL
 
 # 1.e — Ninguno de los workflows del ÁRBOL puede estar en un estado
-# deshabilitado. Se excluyen los tres propios para no reportarlos dos veces:
+# deshabilitado. Se excluyen los cuatro propios para no reportarlos dos veces:
 # 1.d ya los cubre con su consecuencia específica.
 while IFS= read -r RUTA_WF; do
   [ -z "$RUTA_WF" ] && continue
@@ -654,7 +654,7 @@ else
   echo "$ETIQUETA OK ajuste 1 (workflows): $TOTAL_WF registrados en la API, de los cuales"
   echo "$ETIQUETA $(awk 'END {print NR+0}' "$TMP/api.sorted") bajo '$PREFIJO_WORKFLOWS', todos en"
   echo "$ETIQUETA 'active'; cuadran exactamente con los $LINEAS_ARBOL archivos .yml/.yaml de la"
-  echo "$ETIQUETA rama '$RAMA' (cruce sin delta en ninguna de las dos direcciones), y los tres"
+  echo "$ETIQUETA rama '$RAMA' (cruce sin delta en ninguna de las dos direcciones), y los cuatro"
   echo "$ETIQUETA workflows propios están registrados y activos."
 fi
 
@@ -705,9 +705,9 @@ if [ "$PERMISO" != "$PERMISO_ESPERADO" ]; then
   DERIVAS="${DERIVAS}x"
   echo "$ETIQUETA DERIVA en default_workflow_permissions:"
   echo "$ETIQUETA   esperado: $PERMISO_ESPERADO · encontrado: $PERMISO"
-  echo "$ETIQUETA   Consecuencia: los tres workflows PROPIOS son INMUNES a este ajuste —llevan"
+  echo "$ETIQUETA   Consecuencia: los cuatro workflows PROPIOS son INMUNES a este ajuste —llevan"
   echo "$ETIQUETA   bloque 'permissions:' explícito (ci-fork.yml líneas 26-28, sync-upstream.yml"
-  echo "$ETIQUETA   líneas 47-61 y 557-559, security-scan.yml líneas 12-14)—, así que aquí no"
+  echo "$ETIQUETA   líneas 47-61 y 557-559, security-scan.yml líneas 12-14, smoke-imagen.yml líneas 25-26)—, así que aquí no"
   echo "$ETIQUETA   hay ningún 403 de 'upload-artifact' que citar. La consecuencia real es más"
   echo "$ETIQUETA   estrecha y es de seguridad: en '$PERMISO', los workflows DE UPSTREAM que NO"
   echo "$ETIQUETA   llevan bloque 'permissions:' y que aún disparan reciben un token de ESCRITURA"
@@ -844,7 +844,7 @@ fi
 # dos— sería prometer de más.
 echo "$ETIQUETA Los DOS ajustes que este guion AFIRMA coinciden con lo que este fork necesita en"
 echo "$ETIQUETA '$REPO' (rama '$RAMA'):"
-echo "$ETIQUETA   1. workflows: los tres propios en 'active', ninguno del árbol deshabilitado o"
+echo "$ETIQUETA   1. workflows: los cuatro propios en 'active', ninguno del árbol deshabilitado o"
 echo "$ETIQUETA      dado de baja, y la lista de la API cuadra con el árbol en AMBAS direcciones."
 echo "$ETIQUETA   2. default_workflow_permissions = $PERMISO_ESPERADO"
 echo "$ETIQUETA Y los DOS que solo informa se pudieron leer (ver el bloque de arriba)."
