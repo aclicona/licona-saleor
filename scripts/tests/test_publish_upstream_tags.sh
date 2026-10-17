@@ -38,6 +38,35 @@ verifica "push: publica solo 3.23.2" '[ "$(remotos)" = "3.23.1 3.23.2 " ]'
 SAL=$(cd "$T/w" && TARGET_REF=fork PUSH_TAGS=true sh "$GUION" 3.23 2>&1)
 verifica "idempotente: segunda corrida sin pendientes" 'printf "%s" "$SAL" | grep -q "tags pendientes: 0"'
 
+# B-1280: push que falla (hook pre-receive que rechaza 3.23.4 como lo haría GitHub con workflows).
+g commit -q --allow-empty -m c4 && g tag 3.23.4 && g branch -f fork
+mkdir -p "$T/origin.git/hooks"
+cat > "$T/origin.git/hooks/pre-receive" <<'HOOK'
+#!/bin/sh
+echo "refusing to allow a GitHub App to create or update workflow without workflows permission" >&2
+exit 1
+HOOK
+chmod +x "$T/origin.git/hooks/pre-receive"
+
+RES="$T/resumen.md"; : > "$RES"
+SAL=$(cd "$T/w" && GITHUB_ACTIONS=true GITHUB_STEP_SUMMARY="$RES" GITHUB_REPOSITORY=o/r TARGET_REF=fork PUSH_TAGS=true sh "$GUION" 3.23 2>&1); COD=$?
+verifica "fallo en Actions: sale 1" '[ $COD -eq 1 ]'
+verifica "fallo en Actions: sigue imprimiendo FALLÓ" 'printf "%s" "$SAL" | grep -q "FALLÓ    3.23.4"'
+verifica "fallo en Actions: emite ::warning" 'printf "%s" "$SAL" | grep -q "^::warning title=Tag de upstream sin publicar::3.23.4"'
+verifica "fallo en Actions: detecta permiso workflows" 'printf "%s" "$SAL" | grep -q "no tiene el permiso workflows"'
+verifica "fallo en Actions: el remedio incluye repo y sha" 'printf "%s" "$SAL" | grep -q "repos/o/r/git/refs -f ref=refs/tags/3.23.4 -f sha=$(g rev-list -n 1 3.23.4)"'
+verifica "fallo en Actions: escribe el resumen" 'grep -q "3.23.4" "$RES" && grep -q "Tags de upstream sin publicar" "$RES"'
+verifica "fallo en Actions: no se publicó 3.23.4" '! remotos | grep -q "3.23.4"'
+
+RES2="$T/resumen2.md"; : > "$RES2"
+SAL=$(cd "$T/w" && GITHUB_STEP_SUMMARY="$RES2" TARGET_REF=fork PUSH_TAGS=true sh "$GUION" 3.23 2>&1); COD=$?
+verifica "fallo fuera de Actions: sale 1" '[ $COD -eq 1 ]'
+verifica "fallo fuera de Actions: sin ::warning" '! printf "%s" "$SAL" | grep -q "::warning"'
+verifica "fallo fuera de Actions: mantiene FALLÓ" 'printf "%s" "$SAL" | grep -q "FALLÓ    3.23.4"'
+
+SAL=$(cd "$T/w" && env -u GITHUB_STEP_SUMMARY GITHUB_ACTIONS=true TARGET_REF=fork PUSH_TAGS=true sh "$GUION" 3.23 2>&1); COD=$?
+verifica "Actions sin GITHUB_STEP_SUMMARY: avisa y no falla por ello" '[ $COD -eq 1 ] && printf "%s" "$SAL" | grep -q "::warning"'
+
 (cd "$T/w" && sh "$GUION" >/dev/null 2>&1); verifica "sin argumentos: sale 2" '[ $? -eq 2 ]'
 
 echo; [ "$FALLOS" -eq 0 ] && { echo "todo verde"; exit 0; }; echo "$FALLOS fallo(s)"; exit 1

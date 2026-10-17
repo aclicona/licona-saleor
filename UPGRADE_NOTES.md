@@ -1886,6 +1886,14 @@ mergeado (merge commit; con squash el commit del tag no sería ancestro y se omi
 checkout con `TARGET_REF` apuntando a la rama que contenga el código; (c) confirmar que el `GITHUB_TOKEN` puede
 empujar tags (si hay reglas de protección de tags, hará falta excepción).
 
+**B-1280 — fallos visibles:** cuando un tag introduce commits que tocan `.github/workflows/`, `GITHUB_TOKEN` no puede
+empujarlo (`refusing to allow a GitHub App to create or update workflow ... without workflows permission`) y, al ser el
+paso `continue-on-error`, el job quedaba verde sin que nadie lo viera (run 38292565032, 3.23.5–3.23.10). Desde B-1280 el
+script emite un `::warning title=Tag de upstream sin publicar::` por tag y un bloque en el resumen del run
+(`$GITHUB_STEP_SUMMARY`) con el remedio (`gh api repos/<repo>/git/refs -f ref=refs/tags/<tag> -f sha=<sha>` con un token
+con scope `workflow`). Semántica y exit code sin cambios. **Pendiente, no probado:** crear los refs por API con
+`GITHUB_TOKEN` en vez de `git push` (podría esquivar la restricción); sigue sin verificarse.
+
 ## B-418 — diagnóstico de `TransactionItem` huérfanos (solo lectura)
 
 **Investigación:** Saleor no ofrece limpieza de `TransactionItem`. `clean_checkouts` (`saleor/checkout/tasks.py`)
