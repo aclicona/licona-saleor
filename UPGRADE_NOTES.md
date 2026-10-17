@@ -1994,6 +1994,9 @@ El último verde fue el 2026-09-30 sobre `70056796eb`; en local la suite sale li
   `faulthandler.dump_traceback_later(120, repeat=True)`: si el intérprete no sale tras la sesión, vuelca los stacks de
   todos los hilos cada 2 min (`faulthandler_timeout` solo cubre tests en curso, no la salida). `timeout-minutes` del job
   suite: 60 -> 30.
+- **B-1016 (2026-10-17): `-rA` -> `-ra`.** Con la causa resuelta, `-rA` solo costaba: `summary_passes` tardaba >2 min
+  en imprimir los ~17 900 PASSED, inflaba el log y una vez hizo saltar el watchdog de salida (falso cuelgue). `-ra`
+  conserva el resumen de lo no-passed; `faulthandler_timeout=300`, el watchdog y `timeout-minutes: 30` siguen igual.
 - Al re-forkear a una minor nueva: el `conftest.py` y el workflow se copian de upstream; reaplicar el hook si se quiere
   conservar el diagnóstico (es inocuo sin la variable).
 
