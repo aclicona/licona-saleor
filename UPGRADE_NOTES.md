@@ -8,6 +8,16 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-1416 — tests de `scripts/tests` aislados de `GIT_DIR` heredado (2026-10-17)
+
+Dentro de un hook de git, `GIT_DIR` absoluto gana sobre `git -C`: cuatro tests de guiones (`test_resolve_uv_lock`,
+`test_publish_upstream_tags`, `test_resolve_venv_python`, `test_with_venv`) escribían `user.name=t`/`user.email=t@t`,
+commits y ramas en el repo externo (así aparecieron commits con autor `t <t@t>`). Cada uno hace ahora
+`unset $(git rev-parse --local-env-vars)` al inicio; `test_tests_aislados_de_git_dir.sh` lo vigila ejecutando cada
+test con `GIT_DIR` apuntando a un repo centinela. Solo `scripts/tests/`, sin efecto en runtime.
+
+---
+
 ## B-1020 — `test_http_client_disallows_private_ip_ranges`: DNS fijado a la IP de la cassette (2026-10-17)
 
 El test (código de **upstream**, `Fix test http client (#17262)`) hace una resolución DNS real de `example.com`.

@@ -8,6 +8,8 @@ ORIGEN="${1:-$DIR/../with-venv.sh}"
 
 T=$(mktemp -d) || exit 2
 trap 'rm -rf "$T"' EXIT HUP INT TERM
+# B-1416: sin GIT_DIR/GIT_WORK_TREE heredados (hook de git): `git -C` no los anula y el test escribiria en el repo externo.
+unset $(git rev-parse --local-env-vars)
 
 FALLOS=0
 # verificar <nombre> <exit esperado> <texto esperado> <exit real> <salida>

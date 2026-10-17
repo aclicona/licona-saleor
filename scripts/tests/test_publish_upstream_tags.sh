@@ -5,6 +5,8 @@ DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 2
 GUION="$DIR/../publish-upstream-tags.sh"
 T=$(mktemp -d) || exit 2
 trap 'rm -rf "$T"' EXIT HUP INT TERM
+# B-1416: sin GIT_DIR/GIT_WORK_TREE heredados (hook de git): `git -C` no los anula y el test escribiria en el repo externo.
+unset $(git rev-parse --local-env-vars)
 
 g() { git -C "$T/w" "$@"; }
 git init -q --bare "$T/origin.git"
