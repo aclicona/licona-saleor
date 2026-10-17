@@ -8,6 +8,21 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-1020 — `test_http_client_disallows_private_ip_ranges`: DNS fijado a la IP de la cassette (2026-10-17)
+
+El test (código de **upstream**, `Fix test http client (#17262)`) hace una resolución DNS real de `example.com`.
+`requests-hardened` conecta a la IP resuelta y `vcrpy` construye la URL como `https://<ip>/` sin corchetes; en un
+equipo con IPv6 (p. ej. el Mac de desarrollo) la IP es IPv6 y el matcher `port` de VCR falla con
+`Port could not be cast to integer value`. En CI (sin IPv6) pasa. El cliente (`saleor/core/http_client.py`) no tiene
+el fallo: `requests_hardened` sí entrecomilla IPv6 con `[]`.
+
+- **Arreglo:** solo test. `saleor/core/tests/test_http_client.py` fija `socket.getaddrinfo` de `example.com` a la IPv4
+  de la cassette (`23.215.0.136`) y añade `test_http_client_disallows_private_ipv6_ranges` (`::1`, `fd00::1`, `fe80::1`).
+- **Al sincronizar upstream:** si el conflicto aparece en ese archivo, conservar el parche; si upstream ya lo corrigió
+  (a 2026-10-17 `upstream/main` y `upstream/3.23` siguen idénticos a nuestro archivo), descartar esta entrada.
+
+---
+
 ## B-1234 — fuga de estado: `DeprecatedDummyCreditCardGatewayPlugin.DEFAULT_ACTIVE` quedaba en `True` entre tests (2026-10-16)
 
 El fixture autouse `setup_dummy_credit_card_gateway` de `saleor/payment/gateways/dummy_credit_card/tests/test_dummy_credit_card.py`
