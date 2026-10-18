@@ -8,6 +8,15 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-1449 — preDeploy de saleor-api en config-as-code incluye el chequeo de índices INVALID (2026-10-18)
+
+El 2026-10-13 Andrés cambió en el panel de Railway el Pre-deploy Command de saleor-api a
+`sh scripts/check-invalid-indexes.sh && python manage.py migrate --noinput` (B-1290). `railway.saleor-api.json`
+(`deploy.preDeployCommand`) se alinea con el panel y `scripts/tests/test_railway_config.sh` exige ahora el chequeo y
+`migrate`. Sin esto, un deploy desde el json quitaría el chequeo. Solo config/tests, sin cambio de código de Saleor.
+
+---
+
 ## B-1416 — tests de `scripts/tests` aislados de `GIT_DIR` heredado (2026-10-17)
 
 Dentro de un hook de git, `GIT_DIR` absoluto gana sobre `git -C`: cuatro tests de guiones (`test_resolve_uv_lock`,

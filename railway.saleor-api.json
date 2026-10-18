@@ -9,7 +9,7 @@
   },
   "deploy": {
     "preDeployCommand": [
-      "python manage.py migrate --noinput"
+      "sh scripts/check-invalid-indexes.sh && python manage.py migrate --noinput"
     ],
     "healthcheckPath": "/health/",
     "healthcheckTimeout": 300,

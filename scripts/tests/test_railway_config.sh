@@ -2,7 +2,7 @@
 # test_railway_config.sh — drift-test de railway.saleor-{api,worker,beat}.json (B-876).
 #
 # Esos archivos reproducen lo que hay en el panel de Railway (leído el 2026-10-06).
-# Afirma: api migra en su preDeploy; worker/beat solo esperan (nunca migran); los
+# Afirma: api chequea índices INVALID y migra en su preDeploy; worker/beat solo esperan (nunca migran); los
 # startCommand coinciden con el panel; builder por servicio (api/worker DOCKERFILE,
 # beat RAILPACK, B-978); y que `railway-entrypoint.sh` solo corre donde el
 # startCommand lo invoca explícitamente. La premisa: con Dockerfile (api/worker) un
@@ -40,7 +40,7 @@ for s in api worker beat; do
   verifica "$s: restartPolicy igual que railway.json" "$(igual "$f" deploy.restartPolicyType "$(campo railway.json deploy.restartPolicyType)")"
 done
 
-verifica "api: preDeploy migra" "$(igual railway.saleor-api.json deploy.preDeployCommand '["python manage.py migrate --noinput"]')"
+verifica "api: preDeploy chequea índices INVALID y migra (B-1449)" "$(igual railway.saleor-api.json deploy.preDeployCommand '["sh scripts/check-invalid-indexes.sh && python manage.py migrate --noinput"]')"
 verifica "api: sin startCommand (usa ENTRYPOINT+CMD del Dockerfile)" "$(igual railway.saleor-api.json deploy.startCommand '<ausente>')"
 verifica "api: healthcheck /health/ 300 s" "$([ "$(campo railway.saleor-api.json deploy.healthcheckPath)" = '"/health/"' ] && [ "$(campo railway.saleor-api.json deploy.healthcheckTimeout)" = 300 ]; echo $?)"
 for s in worker beat; do
