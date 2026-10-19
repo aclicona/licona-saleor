@@ -59,7 +59,7 @@ verifica "fallo en Actions: escribe el resumen" 'grep -q "3.23.4" "$RES" && grep
 verifica "fallo en Actions: no se publicó 3.23.4" '! remotos | grep -q "3.23.4"'
 
 RES2="$T/resumen2.md"; : > "$RES2"
-SAL=$(cd "$T/w" && GITHUB_STEP_SUMMARY="$RES2" TARGET_REF=fork PUSH_TAGS=true sh "$GUION" 3.23 2>&1); COD=$?
+SAL=$(cd "$T/w" && env -u GITHUB_ACTIONS GITHUB_STEP_SUMMARY="$RES2" TARGET_REF=fork PUSH_TAGS=true sh "$GUION" 3.23 2>&1); COD=$?
 verifica "fallo fuera de Actions: sale 1" '[ $COD -eq 1 ]'
 verifica "fallo fuera de Actions: sin ::warning" '! printf "%s" "$SAL" | grep -q "::warning"'
 verifica "fallo fuera de Actions: mantiene FALLÓ" 'printf "%s" "$SAL" | grep -q "FALLÓ    3.23.4"'
