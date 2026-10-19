@@ -1903,6 +1903,14 @@ script emite un `::warning title=Tag de upstream sin publicar::` por tag y un bl
 con scope `workflow`). Semántica y exit code sin cambios. **Pendiente, no probado:** crear los refs por API con
 `GITHUB_TOKEN` en vez de `git push` (podría esquivar la restricción); sigue sin verificarse.
 
+**B-1482 — publicar tras el merge, no solo en el cron:** el paso del job `sync` corre ANTES de que exista el merge del
+PR que ese mismo run abre, así que las tags recién absorbidas salían «omitido … (su commit aún no está en HEAD)» y
+esperaban al lunes siguiente (run 38292565032: 3.23.38–41, publicadas a mano en B-1481). Nuevo
+`.github/workflows/publish-upstream-tags.yml` (`push` a `stable/*` + `workflow_dispatch`) llama al mismo script con
+`TARGET_REF=HEAD` y el mismo gate `SYNC_PUBLISH_TAGS`; sin `continue-on-error` (un fallo B-1280 sale en rojo). El push
+a una tag no lo vuelve a disparar (filtro por ramas). Primer run: 39262302917 (verde, «tags pendientes: 0»; omitió
+3.23.42/43, aún no absorbidas).
+
 ## B-418 — diagnóstico de `TransactionItem` huérfanos (solo lectura)
 
 **Investigación:** Saleor no ofrece limpieza de `TransactionItem`. `clean_checkouts` (`saleor/checkout/tasks.py`)
