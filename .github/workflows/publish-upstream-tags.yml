@@ -1,0 +1,65 @@
+name: Publish upstream tags
+
+# B-1482: el paso «Publicar tags de upstream ya absorbidos» de `sync-upstream.yml` corre
+# en el cron del lunes ANTES de que exista el merge del PR de sync que ese mismo workflow
+# abre. Resultado medido en el run 38292565032 (2026-10-12): las tags `3.23.x` recién
+# absorbidas se omitían con «su commit aún no está en HEAD» y quedaban sin publicar hasta
+# el lunes siguiente (y, si el siguiente sync ya no las traía, indefinidamente).
+#
+# Este workflow cierra el hueco: corre tras CADA push a `stable/*`, es decir, justo
+# cuando un humano mergea el PR de sync, y es entonces cuando el commit de la tag ya es
+# ancestro de HEAD. Reutiliza `scripts/publish-upstream-tags.sh` (la misma lógica que el
+# paso del cron, sin duplicarla): solo publica tags cuyo commit YA está en la rama y que
+# el remoto aún no tiene, así que es idempotente y un push sin tags nuevas no hace nada.
+#
+# Mismo gate que el paso del cron: DRY-RUN salvo que la variable de repo
+# SYNC_PUBLISH_TAGS valga 'true'.
+#
+# Sin `continue-on-error` a propósito (a diferencia del cron, que no debe bloquear el
+# sync): aquí el job no bloquea nada, y si una tag no se puede publicar (B-1280: su commit
+# toca `.github/workflows` y `GITHUB_TOKEN` no tiene el permiso `workflows`) queremos el
+# run en rojo además del `::warning` y el resumen que ya emite el script.
+#
+# El trigger `push` filtra por RAMAS: empujar una tag no vuelve a disparar este workflow.
+
+on:
+  push:
+    branches:
+      - 'stable/*'
+  workflow_dispatch:
+
+# Un solo run por rama a la vez, sin cancelar el que va: dos merges seguidos se
+# serializan en vez de pelearse por empujar las mismas tags.
+concurrency:
+  group: publish-upstream-tags-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Sin `ref`: se usa el commit empujado (o la rama elegida en el dispatch), que es
+          # exactamente contra lo que debe compararse «la tag ya está absorbida».
+          # `fetch-depth: 0` es imprescindible para `git merge-base --is-ancestor`.
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch upstream tags
+        run: |
+          git remote add upstream https://github.com/saleor/saleor.git || true
+          git fetch upstream --tags
+
+      - name: Publicar tags de upstream ya absorbidos
+        env:
+          PUSH_TAGS: ${{ vars.SYNC_PUBLISH_TAGS == 'true' && 'true' || 'false' }}
+          TARGET_REF: HEAD
+        run: |
+          CURRENT_MINOR=$(grep '^version' pyproject.toml | sed 's/version = "\([0-9]*\.[0-9]*\).*/\1/')
+          # `sh <script>`: no depende del bit de ejecución (B-627).
+          sh scripts/publish-upstream-tags.sh "$CURRENT_MINOR"
