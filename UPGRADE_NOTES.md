@@ -65,6 +65,9 @@ Conflictos y resolucion:
   el fork los tiene eliminados (usa `ci-fork.yml`) y upstream los modifico (modificar/eliminar). Se **mantiene la
   eliminacion del fork** (`git rm`).
 - `uv.lock`: `scripts/resolve-uv-lock.sh 3.23.47` (regenera desde el lock del tag y reanade las deps propias del fork).
+  **Trampa de zona horaria:** upstream escribe `certifi = "2026-10-20T02:24:16"` (sin `Z`) en `[tool.uv.exclude-newer-package]`;
+  uv lo interpreta en la hora local, asi que un `uv.lock` regenerado en una maquina con TZ distinta de UTC (`05:00:00Z`)
+  rompe `uv sync --locked` en CI (UTC, `00:00:00Z`). Regenerar siempre con `TZ=UTC` y comprobar con `TZ=UTC uv lock --check`.
 - `pyproject.toml` y el resto se fusionaron sin marcadores; las deps propias (`python-dotenv`, `pytest-timeout`) siguen.
 
 **Al hacer merge de upstream:** si vuelven a chocar esos workflows, conservar la eliminacion.

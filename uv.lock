@@ -14,7 +14,7 @@ exclude-newer-span = "P3W"
 
 [options.exclude-newer-package]
 authlib = "2026-11-01T20:40:00Z"
-certifi = "2026-10-21T05:00:00Z"
+certifi = "2026-10-21T00:00:00Z"
 cryptography = "2026-09-30T15:31:00Z"
 django = "2026-11-03T15:25:00Z"
 joserfc = "2026-10-19T00:31:00Z"
