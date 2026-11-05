@@ -40,7 +40,7 @@ for s in api worker beat; do
   verifica "$s: restartPolicy igual que railway.json" "$(igual "$f" deploy.restartPolicyType "$(campo railway.json deploy.restartPolicyType)")"
 done
 
-verifica "api: preDeploy chequea índices INVALID y migra (B-1449)" "$(igual railway.saleor-api.json deploy.preDeployCommand '["sh scripts/check-invalid-indexes.sh && python manage.py migrate --noinput"]')"
+verifica "api: preDeploy chequea índices INVALID y migra (B-1449)" "$(igual railway.saleor-api.json deploy.preDeployCommand '["sh -c \"sh scripts/check-invalid-indexes.sh && python manage.py migrate --noinput\""]')"
 verifica "api: sin startCommand (usa ENTRYPOINT+CMD del Dockerfile)" "$(igual railway.saleor-api.json deploy.startCommand '<ausente>')"
 verifica "api: healthcheck /health/ 300 s" "$([ "$(campo railway.saleor-api.json deploy.healthcheckPath)" = '"/health/"' ] && [ "$(campo railway.saleor-api.json deploy.healthcheckTimeout)" = 300 ]; echo $?)"
 for s in worker beat; do
