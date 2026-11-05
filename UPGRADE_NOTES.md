@@ -1897,6 +1897,9 @@ lo agrega al índice. «CON CONFLICTOS» solo sale si queda algún conflicto en 
 Test: `sh scripts/tests/test_resolve_uv_lock.sh`. Verificar en el primer sync real que el diff del lock
 contra upstream sean solo las líneas de `python-dotenv`.
 
+B-1965: el guion exporta `TZ=UTC` antes de `uv lock`: en una máquina UTC-5 el lock quedaba con `T05:00:00Z`
+y la CI (UTC) lo recalculaba a `T00:00:00Z` (`uv sync --locked` fallaba, B-1960).
+
 ## B-540 — publicar los tags de upstream que el fork ya contiene
 
 **Causa:** `sync-upstream.yml` hace `git fetch upstream --tags` solo dentro del runner y nunca los empuja; al

@@ -87,6 +87,17 @@ repo "$T/r6" ""
 ( cd "$T/r6" && T="$T" PATH="$T/bin:$PATH" sh "$GUION" 3.99.0 >/dev/null 2>&1 )
 verifica "versión de uv leída del Dockerfile" 'grep -q "uv@9.8.7 lock" $T/uvargs'
 
+# 7: uv corre con TZ=UTC aunque el entorno traiga otra zona (B-1965: uv.lock con T05:00:00Z rompía `uv sync --locked` en CI)
+cat >"$T/uvtz" <<'S'
+#!/bin/sh
+echo "TZ=${TZ:-vacia}" >"$T/uvtz_visto"
+{ cat uv.lock; echo x; } >uv.lock.new && mv uv.lock.new uv.lock
+S
+chmod +x "$T/uvtz"
+repo "$T/r7" ""
+( cd "$T/r7" && T="$T" TZ=America/Bogota UV_CMD="$T/uvtz" sh "$GUION" 3.99.0 >/dev/null 2>&1 )
+verifica "uv lock corre con TZ=UTC aunque TZ=America/Bogota" '[ "$(cat $T/uvtz_visto)" = "TZ=UTC" ]'
+
 echo
 if [ "$FALLOS" -eq 0 ]; then echo "todo verde"; exit 0; fi
 echo "$FALLOS fallo(s)"; exit 1

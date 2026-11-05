@@ -16,6 +16,12 @@
 
 set -u
 
+# B-1965: uv escribe en uv.lock las marcas de tiempo de `exclude-newer` en la zona local; en UTC-5
+# queda `T05:00:00Z` y la CI (UTC) lo recalcula a `T00:00:00Z`, con lo que `uv sync --locked` falla.
+# Siempre UTC, sea cual sea la zona de quien lance el sync.
+TZ=UTC
+export TZ
+
 TAG=${1:?uso: resolve-uv-lock.sh <tag-upstream>}
 DOCKERFILE=${DOCKERFILE:-Dockerfile}
 
