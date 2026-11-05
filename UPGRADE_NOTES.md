@@ -55,6 +55,22 @@ fallaban por un gateway de más. Sueltos pasaban.
 
 ---
 
+## B-1960 — sync upstream 3.23.42..3.23.47 en un solo merge del tag 3.23.47 (2026-11-05)
+
+Se integra `3.23.47` directamente sobre `stable/3.23` (que estaba en 3.23.41); los parches intermedios quedan incluidos
+en la historia del tag. Las ramas `sync/upstream-3.23.43/.44/.45` (con conflictos sin resolver) quedan superadas.
+
+Conflictos y resolucion:
+- `.github/workflows/{bump-dependencies.yml,check-licenses.yaml,e2e.yml,test-migrations-compatibility.yml,tests-and-linters.yml}`:
+  el fork los tiene eliminados (usa `ci-fork.yml`) y upstream los modifico (modificar/eliminar). Se **mantiene la
+  eliminacion del fork** (`git rm`).
+- `uv.lock`: `scripts/resolve-uv-lock.sh 3.23.47` (regenera desde el lock del tag y reanade las deps propias del fork).
+- `pyproject.toml` y el resto se fusionaron sin marcadores; las deps propias (`python-dotenv`, `pytest-timeout`) siguen.
+
+**Al hacer merge de upstream:** si vuelven a chocar esos workflows, conservar la eliminacion.
+
+---
+
 ## B-1288 — `scripts/check-invalid-indexes.sh`: detectar índices INVALID antes de migrar (2026-10-13)
 
 El sync 3.23.41 trajo migraciones de upstream `atomic = False` con `CREATE UNIQUE INDEX CONCURRENTLY` seguido de

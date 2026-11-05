@@ -16,12 +16,17 @@ from .....product.models import (
     Product,
     ProductChannelListing,
     ProductTranslation,
+    ProductVariant,
     ProductVariantChannelListing,
 )
 from .....tests.utils import dummy_editorjs
 from .....thumbnail.models import Thumbnail
 from .....warehouse.models import Allocation, Stock
-from ....core.enums import LanguageCodeEnum, ThumbnailFormatEnum
+from ....core.enums import (
+    LanguageCodeEnum,
+    ThumbnailFormatEnum,
+    ThumbnailSizeRoundingEnum,
+)
 from ....tests.utils import get_graphql_content, get_graphql_content_from_response
 
 QUERY_PRODUCT = """
@@ -2041,6 +2046,93 @@ def test_query_product_media_by_id_with_size_proxy_url_returned(
     )
 
 
+QUERY_PRODUCT_MEDIA_BY_ID_WITH_SIZE_ROUNDING = """
+    query (
+        $productId: ID!
+        $mediaId: ID!
+        $channel: String
+        $size: Int
+        $sizeRounding: ThumbnailSizeRoundingEnum
+    ) {
+        product(id: $productId, channel: $channel) {
+            mediaById(id: $mediaId) {
+                url(size: $size, sizeRounding: $sizeRounding)
+            }
+        }
+    }
+"""
+
+
+@pytest.mark.parametrize(
+    ("size_rounding", "expected_size"),
+    [
+        (ThumbnailSizeRoundingEnum.UP.name, 2048),
+        (ThumbnailSizeRoundingEnum.NEAREST.name, 1024),
+    ],
+)
+def test_query_product_media_by_id_with_size_rounding(
+    size_rounding, expected_size, user_api_client, product_with_image, channel_USD
+):
+    # given
+    media_id = graphene.Node.to_global_id(
+        "ProductMedia", product_with_image.media.get().pk
+    )
+    variables = {
+        "productId": graphene.Node.to_global_id("Product", product_with_image.pk),
+        "mediaId": media_id,
+        "channel": channel_USD.slug,
+        "size": 1500,
+        "sizeRounding": size_rounding,
+    }
+
+    # when
+    response = user_api_client.post_graphql(
+        QUERY_PRODUCT_MEDIA_BY_ID_WITH_SIZE_ROUNDING, variables
+    )
+
+    # then
+    content = get_graphql_content(response)
+    assert (
+        content["data"]["product"]["mediaById"]["url"]
+        == f"https://example.com/thumbnail/{media_id}/{expected_size}/"
+    )
+
+
+@pytest.mark.parametrize(
+    ("_case", "size_rounding_variables"),
+    [
+        ("omitted", {}),
+        ("null", {"sizeRounding": None}),
+    ],
+)
+def test_query_product_media_by_id_size_rounding_defaults_to_nearest(
+    _case, size_rounding_variables, user_api_client, product_with_image, channel_USD
+):
+    # given
+    media_id = graphene.Node.to_global_id(
+        "ProductMedia", product_with_image.media.get().pk
+    )
+    variables = {
+        "productId": graphene.Node.to_global_id("Product", product_with_image.pk),
+        "mediaId": media_id,
+        "channel": channel_USD.slug,
+        "size": 1500,
+        **size_rounding_variables,
+    }
+
+    # when
+    response = user_api_client.post_graphql(
+        QUERY_PRODUCT_MEDIA_BY_ID_WITH_SIZE_ROUNDING, variables
+    )
+
+    # then
+    content = get_graphql_content(response)
+    assert (
+        content["data"]["product"]["mediaById"]["url"]
+        == f"https://example.com/thumbnail/{media_id}/1024/"
+    )
+
+
 def test_query_product_media_by_id_with_size_thumbnail_url_returned(
     user_api_client, product_with_image, channel_USD
 ):
@@ -3170,6 +3262,40 @@ def test_query_product_variants_with_where(
 
     assert len(variants) == 1
     assert variants[0]["node"]["sku"] == sku_value
+
+
+def test_query_product_variants_with_where_external_reference(
+    user_api_client, product_variant_list, channel_USD
+):
+    # given
+    product = product_variant_list[0].product
+    first_external_reference = "external-reference-a"
+    second_external_reference = "external-reference-b"
+    product_variant_list[0].external_reference = first_external_reference
+    product_variant_list[1].external_reference = second_external_reference
+    ProductVariant.objects.bulk_update(product_variant_list[:2], ["external_reference"])
+
+    variables = {
+        "id": graphene.Node.to_global_id("Product", product.pk),
+        "channel": channel_USD.slug,
+        "where": {
+            "externalReference": {
+                "oneOf": [first_external_reference, second_external_reference]
+            }
+        },
+    }
+
+    # when
+    response = user_api_client.post_graphql(QUERY_FETCH_PRODUCT_VARIANTS, variables)
+
+    # then
+    content = get_graphql_content(response)
+    variants = content["data"]["product"]["productVariants"]["edges"]
+    assert len(variants) == 2
+    assert {node["node"]["id"] for node in variants} == {
+        graphene.Node.to_global_id("ProductVariant", variant.pk)
+        for variant in product_variant_list[:2]
+    }
 
 
 def test_applies_limit_on_product_assigned_attributes(
