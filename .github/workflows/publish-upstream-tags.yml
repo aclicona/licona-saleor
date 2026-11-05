@@ -48,7 +48,14 @@ jobs:
           # exactamente contra lo que debe compararse «la tag ya está absorbida».
           # `fetch-depth: 0` es imprescindible para `git merge-base --is-ancestor`.
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # B-1966: el `git push` de las tags usa las credenciales de este checkout. Con el
+          # `GITHUB_TOKEN` automático GitHub rechaza publicar tags cuyo commit toca
+          # `.github/workflows/` (le falta el permiso `workflows`, que ninguna clave de
+          # `permissions:` concede). `PUBLISH_TAGS_TOKEN` es un PAT de grano fino limitado a
+          # este repo (Contents + Workflows: lectura y escritura) que caduca: al renovarlo,
+          # actualizar este secreto. Si no existe, cae al token de siempre (el run seguirá
+          # fallando solo en las tags que toquen workflows, como antes).
+          token: ${{ secrets.PUBLISH_TAGS_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Fetch upstream tags
         run: |
