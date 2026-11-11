@@ -8,7 +8,7 @@
     }
   },
   "deploy": {
-    "startCommand": "sh -c 'celery -A saleor worker -E --concurrency=4'",
+    "startCommand": "sh -c 'sh scripts/wait-for-db.sh && exec celery -A saleor worker -E --concurrency=4'",
     "preDeployCommand": [
       "sh scripts/wait-for-migrations.sh"
     ],
