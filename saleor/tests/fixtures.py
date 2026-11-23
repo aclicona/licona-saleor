@@ -1,8 +1,8 @@
 import datetime
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from functools import partial
 from io import BytesIO
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import graphene
 import pytest
@@ -12,9 +12,11 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test.utils import CaptureQueriesContext as BaseCaptureQueriesContext
 from freezegun import freeze_time
+from kombu import Connection
 from PIL import Image
 
 from ..account.models import Address, Group, StaffNotificationRecipient
+from ..celeryconf import app as celery_app
 from ..core import JobStatus
 from ..core.db.locks import AdvisoryLock, get_advisory_lock_namespace
 from ..core.models import EventDelivery, EventDeliveryAttempt, EventPayload
@@ -232,6 +234,56 @@ def assert_advisory_lock_before_tree_write(capture_queries):
         )
 
     return _assert_advisory_lock_before_tree_write
+
+
+@pytest.fixture
+def assert_row_lock_before_first_write(capture_queries):
+    """Assert the wrapped block locks `locked_table` rows before writing `written_table`.
+
+    Checks that the first `SELECT ... FOR UPDATE` on `locked_table` comes before
+    the first `INSERT`, `UPDATE` or `DELETE` on `written_table` in the SQL emitted
+    by the block.
+    """
+
+    @contextmanager
+    def _assert_row_lock_before_first_write(locked_table: str, written_table: str):
+        def is_lock_query(sql: str) -> bool:
+            # e.g. `SELECT ... FROM "order_order" WHERE ... FOR UPDATE OF ...`
+            return (
+                sql.startswith("SELECT")
+                and f'FROM "{locked_table}"' in sql
+                and "FOR UPDATE" in sql
+            )
+
+        def is_write_query(sql: str) -> bool:
+            # e.g. `UPDATE "order_orderline" SET ...`
+            return sql.startswith(
+                (
+                    f'INSERT INTO "{written_table}"',
+                    f'UPDATE "{written_table}"',
+                    f'DELETE FROM "{written_table}"',
+                )
+            )
+
+        with capture_queries() as ctx:
+            yield
+
+        # Positions of the queries in the order they were sent to the database.
+        queries = [query["sql"] for query in ctx.captured_queries]
+        lock_indexes = [i for i, sql in enumerate(queries) if is_lock_query(sql)]
+        write_indexes = [i for i, sql in enumerate(queries) if is_write_query(sql)]
+
+        # Both must happen, otherwise there is nothing to compare.
+        assert lock_indexes, f"no row lock on {locked_table} was captured"
+        assert write_indexes, f"no write query on {written_table} was captured"
+
+        # The first lock must be sent before the first write.
+        first_lock_index, first_write_index = lock_indexes[0], write_indexes[0]
+        assert first_lock_index < first_write_index, (
+            f"{locked_table} was locked after the first write to {written_table}"
+        )
+
+    return _assert_row_lock_before_first_write
 
 
 @pytest.fixture
@@ -1792,3 +1844,25 @@ def cache_clear():
     cache.clear()
     yield
     cache.clear()
+
+
+@pytest.fixture
+def sqs_broker_client(settings):
+    """Publish Celery messages through Saleor's SQS transport instead of running them.
+
+    Yields the mocked SQS client, so a test can assert on what `send_message` got.
+    """
+    settings.CELERY_TASK_ALWAYS_EAGER = False
+    sqs_client = MagicMock()
+    session = MagicMock()
+    session.client.return_value = sqs_client
+    with (
+        patch("boto3.session.Session", return_value=session),
+        Connection(transport="saleor.core.sqs:Transport") as connection,
+        patch.object(
+            celery_app,
+            "producer_or_acquire",
+            return_value=nullcontext(celery_app.amqp.Producer(connection)),
+        ),
+    ):
+        yield sqs_client
