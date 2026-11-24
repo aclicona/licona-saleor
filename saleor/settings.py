@@ -837,6 +837,14 @@ if OBSERVABILITY_ACTIVE:
 # e.g. HTTP_CF_Connecting_IP for Cloudflare or X_FORWARDED_FOR
 REAL_IP_ENVIRON = get_list(os.environ.get("REAL_IP_ENVIRON", "REMOTE_ADDR"))
 
+# B-2471: número de proxies de confianza delante de la app (el edge de Railway = 1).
+# `get_client_ip` toma la IP del X-Forwarded-For contando desde la derecha, que es la
+# parte que añaden nuestros proxies; la izquierda la controla el cliente.
+# 0 = ignorar X-Forwarded-For y usar REMOTE_ADDR.
+TRUSTED_PROXY_HOPS = int(os.environ.get("TRUSTED_PROXY_HOPS", "1"))
+if TRUSTED_PROXY_HOPS < 0:
+    raise ImproperlyConfigured("TRUSTED_PROXY_HOPS no puede ser negativo.")
+
 # Slugs for menus precreated in Django migrations
 DEFAULT_MENUS = {"top_menu_name": "navbar", "bottom_menu_name": "footer"}
 

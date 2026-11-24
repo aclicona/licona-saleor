@@ -8,6 +8,25 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-2471 — `get_client_ip` toma la IP de confianza desde la derecha del X-Forwarded-For (2026-11-24)
+
+**Cambio divergente de upstream** en `saleor/core/utils/__init__.py::get_client_ip`. Upstream devuelve la primera IP
+válida del `X-Forwarded-For`; esa parte la controla el cliente, así que con saleor-api público un atacante rota una IP
+inventada por petición y se salta el freno de login (`saleor/account/throttling.py`) y falsea el `customer_ip_address`
+de pagos (`checkout_payment_create.py`, `transaction/utils.py`).
+
+- **Arreglo:** nuevo setting `TRUSTED_PROXY_HOPS` (`saleor/settings.py`, env `TRUSTED_PROXY_HOPS`, defecto `1` = el edge
+  de Railway; `0` = ignorar XFF y usar `REMOTE_ADDR`; negativo = `ImproperlyConfigured`). `get_client_ip` separa el
+  header por comas, hace `strip()` y toma el elemento en la posición `-hops`; si falta o no es IP válida, `REMOTE_ADDR`.
+  No escanea hacia la izquierda.
+- **Tests:** los de upstream (`test_core.py::test_get_client_ip`) siguen pasando sin tocarlos; los propios están en
+  `saleor/core/tests/test_get_client_ip_proxy_hops.py`, `saleor/account/tests/test_throttling_forwarded_for.py` y
+  `saleor/graphql/payment/tests/mutations/test_transaction_initialize_forwarded_for.py`.
+- **Al sincronizar upstream:** conservar este comportamiento y el setting aunque upstream reescriba `get_client_ip`.
+  Pendiente de verificar en real: que el edge de Railway añada la IP real al final del XFF (hops=1).
+
+---
+
 ## B-1449 — preDeploy de saleor-api en config-as-code incluye el chequeo de índices INVALID (2026-10-18)
 
 El 2026-10-13 Andrés cambió en el panel de Railway el Pre-deploy Command de saleor-api a

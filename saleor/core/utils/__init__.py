@@ -57,18 +57,27 @@ def build_absolute_uri(location: str, domain: str | None = None) -> str:
 def get_client_ip(request):
     """Retrieve the IP address from the request data.
 
-    Tries to get a valid IP address from X-Forwarded-For, if the user is hiding behind
-    a transparent proxy or if the server is behind a proxy.
+    Divergence from upstream (B-2471, see UPGRADE_NOTES.md): the client controls the
+    left side of X-Forwarded-For, so taking the first valid IP lets anyone spoof it.
+    Only the entry added by our trusted proxies is reliable, so the IP is read
+    ``settings.TRUSTED_PROXY_HOPS`` positions from the right of the header.
 
-    If no forwarded IP was provided or all of them are invalid,
-    it fallback to the requester IP.
+    Falls back to the requester IP (REMOTE_ADDR) when hops is 0, there is no header,
+    the header has fewer entries than hops, or the selected entry is not a valid IP.
+    Entries to the left are never scanned.
     """
-    ip = request.META.get("HTTP_X_FORWARDED_FOR", "")
-    ips = ip.split(",")
-    for ip in ips:
-        if is_valid_ipv4(ip) or is_valid_ipv6(ip):
-            return ip
-    return request.META.get("REMOTE_ADDR", None)
+    remote_addr = request.META.get("REMOTE_ADDR", None)
+    hops = settings.TRUSTED_PROXY_HOPS
+    forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    if hops <= 0 or not forwarded_for:
+        return remote_addr
+    ips = [ip.strip() for ip in forwarded_for.split(",")]
+    if len(ips) < hops:
+        return remote_addr
+    ip = ips[-hops]
+    if is_valid_ipv4(ip) or is_valid_ipv6(ip):
+        return ip
+    return remote_addr
 
 
 def is_valid_ipv4(ip: str) -> bool:
