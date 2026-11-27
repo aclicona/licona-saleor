@@ -1,9 +1,10 @@
-"""Throttling of the current password check of `passwordChange`.
+"""Throttling of the current password check of a logged in user.
 
 Divergence from upstream (B-2606, see UPGRADE_NOTES.md): upstream lets the holder of an
-access token guess the current password without limit. Attempts are counted per user
-only (no IP) under keys of their own, so they never interact with the login throttling.
-A cache failure propagates, so the password is never checked without the throttling.
+access token guess the current password without limit through `passwordChange` and
+`requestEmailChange`. Both share the same attempts, counted per user only (no IP) under
+keys of their own, so they never interact with the login throttling. A cache failure
+propagates, so the password is never checked without the throttling.
 """
 
 import datetime
@@ -39,7 +40,7 @@ def check_old_password_with_throttling(user: models.User, old_password: str) -> 
             seconds=MIN_DELAY
         )
         raise ValidationError(
-            f"Password change has been suspended till {next_attempt_time} due to too "
+            f"Password check has been suspended till {next_attempt_time} due to too "
             f"many attempts.",
             code=AccountErrorCode.LOGIN_ATTEMPT_DELAYED.value,
         )

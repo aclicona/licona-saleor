@@ -3,16 +3,23 @@ from unittest.mock import ANY, patch
 from urllib.parse import urlencode
 
 import graphene
+import pytest
 from django.conf import settings
+from django.core.cache import cache
 from freezegun import freeze_time
 
 from ......account.error_codes import AccountErrorCode
 from ......account.notifications import get_default_user_payload
+from ......account.throttling_password_change import (
+    get_cache_key_blocked_password_change,
+    get_cache_key_failed_password_change,
+)
 from ......core.jwt import JWT_CONFIRM_CHANGE_EMAIL_TYPE, jwt_decode
 from ......core.notify import NotifyEventType
 from ......core.tests.utils import get_site_context_payload
 from ......core.utils.url import prepare_url
 from .....tests.utils import get_graphql_content
+from ..authentication.test_password_change import CHANGE_PASSWORD_MUTATION
 from .conftest import CONFIRM_EMAIL_UPDATE_QUERY, REQUEST_EMAIL_CHANGE_QUERY
 
 
@@ -262,3 +269,101 @@ def test_request_email_change_but_no_channels_exist(user_api_client, customer_us
             "field": "channel",
         }
     ]
+
+
+# B-2606: throttling of the password check, shared with `passwordChange`
+
+
+@pytest.fixture
+def locmem_cache(settings):
+    # In-process cache: its expiry follows `freeze_time`, a Redis server's would not.
+    settings.CACHES = {
+        "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}
+    }
+
+
+@pytest.fixture
+def throttling_cache(locmem_cache, cache_clear):
+    return cache
+
+
+def _request_email_change(client, password, channel_slug):
+    variables = {
+        "password": password,
+        "new_email": "new_email@example.com",
+        "redirect_url": "http://www.example.com",
+        "channel": channel_slug,
+    }
+    response = client.post_graphql(REQUEST_EMAIL_CHANGE_QUERY, variables)
+    return get_graphql_content(response)["data"]["requestEmailChange"]
+
+
+def _change_password(client, old_password):
+    variables = {"oldPassword": old_password, "newPassword": "spanish-inquisition"}
+    response = client.post_graphql(CHANGE_PASSWORD_MUTATION, variables)
+    return get_graphql_content(response)["data"]["passwordChange"]
+
+
+@freeze_time("2026-11-27 12:00:00")
+@patch("saleor.plugins.manager.PluginsManager.account_change_email_requested")
+def test_request_email_change_is_delayed_after_failure(
+    mocked_event, user_api_client, channel_PLN, throttling_cache
+):
+    # given
+    data = _request_email_change(user_api_client, "incorrect", channel_PLN.slug)
+    assert data["errors"][0]["code"] == AccountErrorCode.INVALID_CREDENTIALS.name
+    assert data["errors"][0]["field"] == "password"
+
+    # when
+    data = _request_email_change(user_api_client, "password", channel_PLN.slug)
+
+    # then
+    assert len(data["errors"]) == 1
+    assert data["errors"][0]["code"] == AccountErrorCode.LOGIN_ATTEMPT_DELAYED.name
+    assert data["errors"][0]["field"] is None
+    assert "Password check has been suspended" in data["errors"][0]["message"]
+    assert data["user"] is None
+    mocked_event.assert_not_called()
+
+
+@freeze_time("2026-11-27 12:00:00")
+def test_request_email_change_failure_delays_password_change(
+    user_api_client, channel_PLN, throttling_cache
+):
+    _request_email_change(user_api_client, "incorrect", channel_PLN.slug)
+
+    data = _change_password(user_api_client, "password")
+
+    assert data["errors"][0]["code"] == AccountErrorCode.LOGIN_ATTEMPT_DELAYED.name
+    user_api_client.user.refresh_from_db()
+    assert user_api_client.user.check_password("password")
+
+
+@freeze_time("2026-11-27 12:00:00")
+def test_password_change_failure_delays_request_email_change(
+    user_api_client, channel_PLN, throttling_cache
+):
+    _change_password(user_api_client, "incorrect")
+
+    data = _request_email_change(user_api_client, "password", channel_PLN.slug)
+
+    assert data["errors"][0]["code"] == AccountErrorCode.LOGIN_ATTEMPT_DELAYED.name
+
+
+def test_request_email_change_correct_password_clears_throttling(
+    user_api_client, channel_PLN, throttling_cache
+):
+    user = user_api_client.user
+    fail_key = get_cache_key_failed_password_change(user.pk)
+    block_key = get_cache_key_blocked_password_change(user.pk)
+
+    with freeze_time("2026-11-27 12:00:00") as frozen_time:
+        _request_email_change(user_api_client, "incorrect", channel_PLN.slug)
+        assert throttling_cache.get(fail_key) == 1
+        frozen_time.tick(2)
+
+        data = _request_email_change(user_api_client, "password", channel_PLN.slug)
+
+        assert not data["errors"]
+        assert throttling_cache.get(fail_key) is None
+        assert throttling_cache.get(block_key) is None

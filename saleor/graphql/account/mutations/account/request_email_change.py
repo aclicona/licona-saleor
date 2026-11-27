@@ -7,6 +7,9 @@ from django.core.exceptions import ValidationError
 
 from .....account import models, notifications
 from .....account.error_codes import AccountErrorCode
+from .....account.throttling_password_change import (  # B-2606
+    check_old_password_with_throttling,
+)
 from .....core.jwt import JWT_CONFIRM_CHANGE_EMAIL_TYPE, create_token
 from .....core.utils.url import prepare_url, validate_storefront_url
 from .....permission.auth_filters import AuthorizationFilters
@@ -74,7 +77,8 @@ class RequestEmailChange(BaseMutation):
         user = cast(models.User, user)
         new_email = new_email.lower()
 
-        if not user.check_password(password):
+        # B-2606: throttled check, replaces `user.check_password(password)`
+        if not check_old_password_with_throttling(user, password):
             raise ValidationError(
                 {
                     "password": ValidationError(

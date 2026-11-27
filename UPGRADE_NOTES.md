@@ -8,25 +8,30 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
-## B-2606 — `passwordChange` frena los intentos con la contraseña actual (2026-11-27)
+## B-2606 — `passwordChange` y `requestEmailChange` frenan los intentos con la contraseña actual (2026-11-27)
 
-**Cambio divergente de upstream.** Upstream comprueba `oldPassword` sin límite, así que quien tenga un token de acceso
-puede adivinar la contraseña actual a fuerza bruta.
+**Cambio divergente de upstream.** Upstream comprueba la contraseña actual sin límite en `passwordChange`
+(`oldPassword`) y `requestEmailChange` (`password`), así que quien tenga un token de acceso puede adivinarla a fuerza
+bruta.
 
 - **Arreglo:** módulo nuevo `saleor/account/throttling_password_change.py` (reutiliza los helpers de
   `saleor/account/throttling.py`) y su llamada, marcada `# B-2606`, en
-  `saleor/graphql/account/mutations/authentication/password_change.py` en lugar de `user.check_password(old_password)`.
+  `saleor/graphql/account/mutations/authentication/password_change.py` en lugar de `user.check_password(old_password)`,
+  y en `saleor/graphql/account/mutations/account/request_email_change.py` en lugar de `user.check_password(password)`.
+  Las dos mutaciones comparten contador y bloqueo (el nombre del módulo y las claves dicen `password_change` en ambas).
   Claves solo por usuario (`password_change:fail:user:{pk}`, `password_change:block:user:{pk}`), sin IP y sin nada
   compartido con `login:*`. Espera de 1, 2, 4… s y 1 h desde el décimo fallo; el contador dura 2 h desde el último
   fallo. Un intento bloqueado devuelve `LOGIN_ATTEMPT_DELAYED` (sin campo) sin comprobar la clave; acertar la clave
-  actual limpia contador y bloqueo aunque la nueva no valide. Si la caché falla, la mutación falla (cerrado). Sin
+  actual limpia contador y bloqueo aunque el resto de la mutación no valide. Con la clave incorrecta cada mutación
+  conserva su campo y código de error. Si la caché falla, la mutación falla (cerrado). Sin
   `oldPassword` la conducta es la de upstream y no toca el freno. Sin cambios en `schema.graphql`.
 - **Tests:** `saleor/account/tests/test_throttling_password_change.py` y los casos B-2606 de
-  `saleor/graphql/account/tests/mutations/authentication/test_password_change.py`.
-- **Al sincronizar upstream:** conservar la llamada en `password_change.py`; si upstream añade su freno, retirar el
-  nuestro.
-- **Riesgos aceptados:** quien tiene el token puede impedir al dueño cambiar la clave hasta 1 h, renovable (queda la
-  recuperación por correo). Fijar una clave sin tener contraseña usable solo exige sesión (revisar si se activa OIDC).
+  `saleor/graphql/account/tests/mutations/authentication/test_password_change.py` y
+  `saleor/graphql/account/tests/mutations/account/test_request_email_change.py`.
+- **Al sincronizar upstream:** conservar las llamadas en `password_change.py` y `request_email_change.py`; si upstream
+  añade su freno, retirar el nuestro.
+- **Riesgos aceptados:** quien tiene el token puede impedir al dueño cambiar la clave o el correo hasta 1 h,
+  renovable (queda la recuperación por correo). Fijar una clave sin tener contraseña usable solo exige sesión (revisar si se activa OIDC).
   El freno depende de una caché compartida (Redis) en producción, **no verificado**.
 - **Pendiente (reporte hermano):** `accountRegister` y `requestPasswordReset` siguen sin tope por red ni global.
 
