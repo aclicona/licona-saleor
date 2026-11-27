@@ -1146,8 +1146,8 @@ RESET_PASSWORD_LOCK_TIME = parse(
 )
 
 
-# B-2607: caps on `accountRegister` and `requestPasswordReset`, counted in fixed
-# windows. A limit of 0 disables that cap.
+# B-2607 and B-2611: caps on `accountRegister`, `requestPasswordReset` and
+# `requestEmailChange`, counted in fixed windows. A limit of 0 disables that cap.
 def get_throttle_window_from_env(name: str, default_value: str) -> int:
     value = os.environ.get(name, default_value)
     seconds = parse(value)
@@ -1177,6 +1177,10 @@ PASSWORD_RESET_NETWORK_LIMIT = get_throttle_limit_from_env(
 )
 PASSWORD_RESET_GLOBAL_LIMIT = get_throttle_limit_from_env(
     "PASSWORD_RESET_GLOBAL_LIMIT", 200
+)
+EMAIL_CHANGE_USER_LIMIT = get_throttle_limit_from_env("EMAIL_CHANGE_USER_LIMIT", 3)
+EMAIL_CHANGE_GLOBAL_LIMIT = get_throttle_limit_from_env(
+    "EMAIL_CHANGE_GLOBAL_LIMIT", 100
 )
 
 # Lock time for request confirmation email mutation per user

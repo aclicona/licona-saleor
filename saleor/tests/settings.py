@@ -66,11 +66,13 @@ OBSERVABILITY_REPORT_ALL_API_CALLS = False
 
 PLUGINS = []
 
-# B-2607: the caps are disabled by default, their tests enable them.
+# B-2607 and B-2611: the caps are disabled by default, their tests enable them.
 ACCOUNT_REGISTER_NETWORK_LIMIT = 0
 ACCOUNT_REGISTER_GLOBAL_LIMIT = 0
 PASSWORD_RESET_NETWORK_LIMIT = 0
 PASSWORD_RESET_GLOBAL_LIMIT = 0
+EMAIL_CHANGE_USER_LIMIT = 0
+EMAIL_CHANGE_GLOBAL_LIMIT = 0
 
 PATTERNS_IGNORED_IN_QUERY_CAPTURES: list[Pattern | SimpleLazyObject] = [
     lazy_re_compile(r"^SET\s+")

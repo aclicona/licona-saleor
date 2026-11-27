@@ -1,4 +1,4 @@
-"""B-2607: caps on `accountRegister` and `requestPasswordReset`."""
+"""B-2607 and B-2611: caps on the mutations that create accounts or send emails."""
 
 import datetime
 import os
@@ -18,6 +18,7 @@ from ..models import User
 from ..tasks import trigger_send_password_reset_notification
 from ..throttling_email_requests import (
     check_account_register_throttling,
+    check_email_change_throttling,
     check_password_reset_throttling,
     is_password_reset_global_limit_exceeded,
 )
@@ -269,6 +270,8 @@ LIMIT_SETTINGS = [
     "ACCOUNT_REGISTER_GLOBAL_LIMIT",
     "PASSWORD_RESET_NETWORK_LIMIT",
     "PASSWORD_RESET_GLOBAL_LIMIT",
+    "EMAIL_CHANGE_USER_LIMIT",
+    "EMAIL_CHANGE_GLOBAL_LIMIT",
 ]
 
 
@@ -380,3 +383,86 @@ def test_reset_task_without_real_send_does_not_consume_global(
 
     assert throttling_cache.get("password_reset:count:global") == 1
     assert mocked_notify.call_count == 1
+
+
+# B-2611: caps on `requestEmailChange`, per user and global
+
+
+def test_email_change_user_limit_and_window_expiry(settings, throttling_cache):
+    settings.EMAIL_CHANGE_USER_LIMIT = 2
+    user = User(pk=1)
+
+    with freeze_time(NOW) as frozen_time:
+        check_email_change_throttling(user)
+        frozen_time.tick(datetime.timedelta(seconds=WINDOW - 1))
+        check_email_change_throttling(user)
+        _assert_delayed(check_email_change_throttling, user)
+        # another user keeps its own quota
+        check_email_change_throttling(User(pk=2))
+
+        # fixed window: rejected calls do not extend it
+        frozen_time.tick(datetime.timedelta(seconds=2))
+        check_email_change_throttling(user)
+
+
+def test_email_change_global_limit_across_users_has_the_same_error(
+    settings, throttling_cache
+):
+    settings.EMAIL_CHANGE_USER_LIMIT = 1
+    settings.EMAIL_CHANGE_GLOBAL_LIMIT = 1
+    check_email_change_throttling(User(pk=1))
+
+    user_error = _assert_delayed(check_email_change_throttling, User(pk=1))
+    with patch(
+        "saleor.account.throttling_email_requests.logger.error"
+    ) as mocked_logger_error:
+        global_error = _assert_delayed(check_email_change_throttling, User(pk=2))
+
+    assert global_error.message == user_error.message
+    mocked_logger_error.assert_called_once()
+
+
+def test_email_change_user_rejection_does_not_consume_global(
+    settings, throttling_cache
+):
+    settings.EMAIL_CHANGE_USER_LIMIT = 1
+    settings.EMAIL_CHANGE_GLOBAL_LIMIT = 10
+    check_email_change_throttling(User(pk=1))
+
+    for _ in range(3):
+        _assert_delayed(check_email_change_throttling, User(pk=1))
+
+    assert throttling_cache.get("email_change:count:user:1") == 4
+    assert throttling_cache.get("email_change:count:global") == 1
+
+
+def test_email_change_zero_user_limit_keeps_the_global_one(settings, throttling_cache):
+    settings.EMAIL_CHANGE_USER_LIMIT = 0
+    settings.EMAIL_CHANGE_GLOBAL_LIMIT = 1
+    check_email_change_throttling(User(pk=1))
+
+    _assert_delayed(check_email_change_throttling, User(pk=2))
+
+
+@patch("saleor.account.throttling_email_requests.cache")
+def test_email_change_zero_limits_disable_the_throttling(mocked_cache, settings):
+    settings.EMAIL_CHANGE_USER_LIMIT = 0
+    settings.EMAIL_CHANGE_GLOBAL_LIMIT = 0
+
+    check_email_change_throttling(User(pk=1))
+
+    assert not mocked_cache.mock_calls
+
+
+@pytest.mark.parametrize(
+    "limit_setting", ["EMAIL_CHANGE_USER_LIMIT", "EMAIL_CHANGE_GLOBAL_LIMIT"]
+)
+@patch("saleor.account.throttling_email_requests.cache")
+def test_email_change_cache_failure_propagates(mocked_cache, limit_setting, settings):
+    settings.EMAIL_CHANGE_USER_LIMIT = 0
+    settings.EMAIL_CHANGE_GLOBAL_LIMIT = 0
+    setattr(settings, limit_setting, 1)
+    mocked_cache.add.side_effect = ConnectionError
+
+    with pytest.raises(ConnectionError):
+        check_email_change_throttling(User(pk=1))

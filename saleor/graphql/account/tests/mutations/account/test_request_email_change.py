@@ -367,3 +367,145 @@ def test_request_email_change_correct_password_clears_throttling(
         assert not data["errors"]
         assert throttling_cache.get(fail_key) is None
         assert throttling_cache.get(block_key) is None
+
+
+# B-2611: caps on the emails sent by the mutation
+
+
+@pytest.fixture
+def email_caps(settings, throttling_cache):
+    settings.EMAIL_CHANGE_USER_LIMIT = 1
+    settings.EMAIL_CHANGE_GLOBAL_LIMIT = 10
+    return throttling_cache
+
+
+@patch("saleor.plugins.manager.PluginsManager.account_change_email_requested")
+@patch("saleor.plugins.manager.PluginsManager.notify")
+def test_request_email_change_over_user_limit_sends_nothing(
+    mocked_notify, mocked_event, user_api_client, channel_PLN, email_caps
+):
+    # given
+    data = _request_email_change(user_api_client, "password", channel_PLN.slug)
+    assert not data["errors"]
+
+    # when
+    data = _request_email_change(user_api_client, "password", channel_PLN.slug)
+
+    # then
+    assert data["user"] is None
+    assert len(data["errors"]) == 1
+    assert data["errors"][0]["code"] == AccountErrorCode.LOGIN_ATTEMPT_DELAYED.name
+    assert data["errors"][0]["field"] is None
+    assert mocked_notify.call_count == 1
+    assert mocked_event.call_count == 1
+
+
+@patch("saleor.plugins.manager.PluginsManager.account_change_email_requested")
+def test_request_email_change_every_alias_counts(
+    mocked_event, user_api_client, channel_PLN, email_caps
+):
+    # given
+    call = (
+        'requestEmailChange(password: "password", newEmail: "%s@example.com", '
+        'redirectUrl: "http://www.example.com", channel: "%s") '
+        "{ errors { code } }"
+    )
+    aliases = " ".join(
+        f"{alias}: {call % (alias, channel_PLN.slug)}"
+        for alias in ("first", "second")
+    )
+    query = f"mutation {{ {aliases} }}"
+
+    # when
+    content = get_graphql_content(user_api_client.post_graphql(query))
+
+    # then
+    assert content["data"]["first"]["errors"] == []
+    assert content["data"]["second"]["errors"] == [
+        {"code": AccountErrorCode.LOGIN_ATTEMPT_DELAYED.name}
+    ]
+    assert mocked_event.call_count == 1
+
+
+@patch("saleor.plugins.manager.PluginsManager.account_change_email_requested")
+def test_request_email_change_over_global_limit_sends_nothing(
+    mocked_event,
+    user_api_client,
+    user2_api_client,
+    channel_PLN,
+    email_caps,
+    settings,
+):
+    # given
+    settings.EMAIL_CHANGE_GLOBAL_LIMIT = 1
+    _request_email_change(user_api_client, "password", channel_PLN.slug)
+
+    # when
+    data = _request_email_change(user2_api_client, "password", channel_PLN.slug)
+
+    # then
+    assert data["errors"][0]["code"] == AccountErrorCode.LOGIN_ATTEMPT_DELAYED.name
+    assert mocked_event.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("password", "redirect_url", "channel"),
+    [
+        ("incorrect", "http://www.example.com", None),
+        ("password", "www.example.com", None),
+        ("password", "http://www.example.com", "missing-channel"),
+    ],
+)
+def test_request_email_change_without_send_does_not_consume_the_caps(
+    password, redirect_url, channel, user_api_client, channel_PLN, email_caps
+):
+    # given
+    variables = {
+        "password": password,
+        "new_email": "new_email@example.com",
+        "redirect_url": redirect_url,
+        "channel": channel or channel_PLN.slug,
+    }
+
+    # when
+    response = user_api_client.post_graphql(REQUEST_EMAIL_CHANGE_QUERY, variables)
+    data = get_graphql_content(response)["data"]["requestEmailChange"]
+
+    # then
+    assert data["errors"]
+    user_pk = user_api_client.user.pk
+    assert email_caps.get(f"email_change:count:user:{user_pk}") is None
+    assert email_caps.get("email_change:count:global") is None
+
+
+@patch("saleor.account.throttling_email_requests.cache")
+@patch("saleor.plugins.manager.PluginsManager.account_change_email_requested")
+@patch("saleor.plugins.manager.PluginsManager.notify")
+def test_request_email_change_cache_failure_sends_nothing(
+    mocked_notify,
+    mocked_event,
+    mocked_cache,
+    user_api_client,
+    channel_PLN,
+    settings,
+    throttling_cache,
+):
+    # given
+    settings.EMAIL_CHANGE_USER_LIMIT = 1
+    mocked_cache.add.side_effect = ConnectionError
+    variables = {
+        "password": "password",
+        "new_email": "new_email@example.com",
+        "redirect_url": "http://www.example.com",
+        "channel": channel_PLN.slug,
+    }
+
+    # when
+    response = user_api_client.post_graphql(REQUEST_EMAIL_CHANGE_QUERY, variables)
+
+    # then
+    content = response.json()
+    assert content["errors"]
+    assert content["data"]["requestEmailChange"] is None
+    mocked_notify.assert_not_called()
+    mocked_event.assert_not_called()

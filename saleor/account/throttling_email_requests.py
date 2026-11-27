@@ -1,22 +1,30 @@
-"""Caps on the anonymous mutations that create accounts or send emails.
+"""Caps on the mutations that create accounts or send emails.
 
-Divergence from upstream (B-2607, see UPGRADE_NOTES.md): upstream lets anyone call
-`accountRegister` and `requestPasswordReset` without limit. Calls are counted in fixed
-windows per network (see `get_throttling_network`) and globally, under keys of their
-own, so they never interact with the login throttling. A limit of 0 disables that cap.
-A cache failure propagates, so nothing is created or sent without the throttling.
+Divergence from upstream (B-2607 and B-2611, see UPGRADE_NOTES.md): upstream lets
+anyone call `accountRegister` and `requestPasswordReset`, and any logged in user call
+`requestEmailChange` (which emails whatever address is given), without limit. Calls
+are counted in fixed windows per network (see `get_throttling_network`) or per user,
+and globally, under keys of their own, so they never interact with the login
+throttling. A limit of 0 disables that cap. A cache failure propagates, so nothing is
+created or sent without the throttling.
 """
+
+import logging
 
 from django.conf import settings
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 
 from ..core.utils import get_client_ip
+from . import models
 from .error_codes import AccountErrorCode
 from .throttling import get_throttling_network
 
 ACCOUNT_REGISTER_SCOPE = "account_register"
 PASSWORD_RESET_SCOPE = "password_reset"
+EMAIL_CHANGE_SCOPE = "email_change"
+
+logger = logging.getLogger(__name__)
 
 
 def check_account_register_throttling(request) -> None:
@@ -50,12 +58,32 @@ def is_password_reset_global_limit_exceeded() -> bool:
     )
 
 
+def check_email_change_throttling(user: models.User) -> None:
+    """Count a `requestEmailChange` email about to be sent; raise if over a cap."""
+    if _is_over_limit(
+        get_cache_key_user(EMAIL_CHANGE_SCOPE, user.pk),
+        settings.EMAIL_CHANGE_USER_LIMIT,
+    ):
+        raise _too_many_requests_error()
+    # checked after the user one, so rejected users do not consume it
+    if _is_over_limit(
+        get_cache_key_global(EMAIL_CHANGE_SCOPE),
+        settings.EMAIL_CHANGE_GLOBAL_LIMIT,
+    ):
+        logger.error("Email change global limit exceeded, the email is not sent.")
+        raise _too_many_requests_error()
+
+
 def get_cache_key_network(scope: str, network: str) -> str:
     return f"{scope}:count:net:{network}"
 
 
 def get_cache_key_global(scope: str) -> str:
     return f"{scope}:count:global"
+
+
+def get_cache_key_user(scope: str, user_id) -> str:
+    return f"{scope}:count:user:{user_id}"
 
 
 def _check_network_limit(request, scope: str, limit: int) -> None:
