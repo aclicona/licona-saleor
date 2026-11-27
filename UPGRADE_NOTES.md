@@ -8,6 +8,29 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-2591 — sync upstream 3.23.48..3.23.50 en un solo merge del tag 3.23.50 (2026-11-27)
+
+Se integra `3.23.50` sobre `stable/3.23` (que estaba en 3.23.47); los parches intermedios quedan incluidos en la
+historia del tag. Las ramas `sync/upstream-3.23.49` (PR #14) y `sync/upstream-3.23.50` (PR #15) quedan superadas.
+
+Conflictos y resolución:
+- `uv.lock` (único): `scripts/resolve-uv-lock.sh 3.23.50`. Frente a la base solo cambia la versión del paquete; las
+  deps propias (`python-dotenv`, `pytest-timeout`) siguen.
+- Sin migraciones, sin cambios en `schema.graphql`, sin cambios de dependencias ni de workflows.
+
+Cambios de comportamiento heredados:
+- Los enlaces de restablecer contraseña ya no caducan al cambiar `last_login` (`AccountDeleteTokenGenerator` pasa a
+  `SessionIndependentTokenGenerator`; usar el enlace sigue invalidándolo porque cambia el hash de la clave). El
+  generador «legacy» de restablecimiento acepta los enlaces enviados antes del despliegue.
+- Texto enriquecido (EditorJS): `<a target="_blank">` se permite por defecto. Setting renombrado
+  `HTML_CLEANER_PREFS` -> `EDITOR_JS_CLEANER_PREFS` (las variables de entorno no cambian) y módulo
+  `core/cleaners/html.py` -> `editorjs.py`.
+- Las mutaciones de líneas de pedido bloquean el pedido antes de tocar las líneas (arregla un deadlock).
+- Filtros de `products` por canal y categoría comparan ids literales (rendimiento).
+- SQS: `MessageGroupId` en reintentos (el fork usa Redis/Valkey; sin efecto esperado).
+
+---
+
 ## B-2606 — `passwordChange` y `requestEmailChange` frenan los intentos con la contraseña actual (2026-11-27)
 
 **Cambio divergente de upstream.** Upstream comprueba la contraseña actual sin límite en `passwordChange`
@@ -1526,6 +1549,7 @@ no una avería del guion.
 | 2026-04-16 | — | 3.22.48 | — | Versión base inicial del fork |
 | 2026-08-24 | 3.22.48 | 3.22.67 | [#3](https://github.com/aclicona/licona-saleor/pull/3) | 19 parches. **Dos CVE**: 2026-48744 (bypass de autorización) y 2026-44472 (secuestro de fusión de cuentas). Único conflicto `uv.lock`, regenerado. 3 migraciones, ninguna destructiva. Cero breaking changes de GraphQL. Ver [bitácora](../docs/hardening/sessions/2026-08-24-sync-upstream-3.22.67.md) |
 | 2026-09-25 | 3.22.67 | 3.22.71 | — | 4 parches (3.22.68..3.22.71). **Un parche de seguridad**: mitigación de DoS por *decompression bomb* de imagen (CWE-409), nuevo `MAX_IMAGE_PIXELS` con valor por defecto 30 M px (admite 5000×5000 con margen; Pillow recibe la mitad del valor a propósito). Ningún CVE/GHSA anunciado para el rango. Único conflicto `uv.lock`, regenerado. Bumps `cryptography` 50.0.1, `pyjwt` 2.15.0, `sqlparse` 0.6.0. `product/0173` modificada (no nueva: no se re-ejecuta). Cero cambios en `schema.graphql`. |
+| 2026-11-27 | 3.23.47 | 3.23.50 | — | 3 parches. Ver la sección B-2591. Único conflicto `uv.lock`, regenerado. Sin migraciones ni cambios de `schema.graphql`. |
 
 ---
 
