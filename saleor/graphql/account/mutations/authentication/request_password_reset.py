@@ -5,6 +5,7 @@ from django.utils import timezone
 
 from .....account.error_codes import AccountErrorCode
 from .....account.tasks import trigger_send_password_reset_notification
+from .....account.throttling_email_requests import check_password_reset_throttling
 from .....account.utils import RequestorAwareContext, retrieve_user_by_email
 from .....core.utils.url import validate_storefront_url
 from .....webhook.event_types import WebhookEventAsyncType
@@ -84,6 +85,7 @@ class RequestPasswordReset(BaseMutation):
     def perform_mutation(cls, _root, info: ResolveInfo, /, **data):
         site_settings = get_site_promise(info.context).get().settings
         check_password_login_not_disabled(site_settings)
+        check_password_reset_throttling(info.context)  # B-2607
 
         email = data["email"]
         redirect_url = data["redirect_url"]

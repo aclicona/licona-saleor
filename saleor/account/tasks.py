@@ -1,7 +1,10 @@
 import logging
+from datetime import timedelta
 from typing import cast
 from urllib.parse import urlencode
 
+from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 
 from ..celeryconf import app
@@ -17,6 +20,7 @@ from ..graphql.site.dataloaders import get_site_promise
 from . import events, notifications, search
 from .models import User
 from .notifications import send_password_reset_notification
+from .throttling_email_requests import is_password_reset_global_limit_exceeded
 from .utils import RequestorAwareContext
 
 logger = logging.getLogger(__name__)
@@ -27,12 +31,33 @@ def _prepare_redirect_url(user: User, redirect_url: str, token: str) -> str:
     return prepare_url(params, redirect_url)
 
 
+def _claim_password_reset_request(user_pk) -> bool:
+    """Mark the reset as requested unless the user is within the lock time (B-2607)."""
+    now = timezone.now()
+    lock_start = now - timedelta(seconds=settings.RESET_PASSWORD_LOCK_TIME)
+    claimed = User.objects.filter(
+        Q(last_password_reset_request__isnull=True)
+        | Q(last_password_reset_request__lte=lock_start),
+        pk=user_pk,
+    ).update(last_password_reset_request=now)
+    return bool(claimed)
+
+
 @app.task()
 @allow_writer()
 def trigger_send_password_reset_notification(
     redirect_url, user_pk, context_data, channel_slug
 ):
     if not user_pk:
+        return
+
+    # B-2607: claim the per user lock atomically and before sending, so concurrent
+    # tasks send a single email
+    if not _claim_password_reset_request(user_pk):
+        return
+
+    if is_password_reset_global_limit_exceeded():  # B-2607
+        logger.error("Password reset email not sent: global limit exceeded.")
         return
 
     user = User.objects.filter(pk=user_pk).first()

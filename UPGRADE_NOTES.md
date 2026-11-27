@@ -8,6 +8,38 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-2607 — tope por red y global en `accountRegister` y `requestPasswordReset` (2026-11-27)
+
+**Cambio divergente de upstream.** Upstream deja llamar sin límite a las dos mutaciones anónimas que crean cuentas o
+mandan correo.
+
+- **Arreglo:** módulo nuevo `saleor/account/throttling_email_requests.py` y tres enganches marcados `# B-2607`:
+  primera línea de `AccountRegister.perform_mutation`, `RequestPasswordReset.perform_mutation` (tras comprobar que el
+  login con clave está habilitado y antes de mirar la cuenta) y
+  `saleor/account/tasks.py::trigger_send_password_reset_notification`.
+- **Qué se cuenta:** cada llamada (cada alias cuenta), antes de validar y de saber si la cuenta existe. Red como en
+  B-2587 (IPv4, o /64 en IPv6) con `get_client_ip` de B-2471. El global del registro solo suma si la red no fue
+  rechazada. El global de recuperación se cuenta en la tarea, solo sobre envíos reales.
+- **Respuesta:** `LOGIN_ATTEMPT_DELAYED` sin campo y con mensaje genérico; sin IP, `UNKNOWN_IP_ADDRESS`. Superado el
+  global de recuperación la mutación responde sin errores y la tarea no envía: solo deja un `logger.error`.
+- **Candado por usuario:** la tarea marca `last_password_reset_request` con un `UPDATE` condicional antes de enviar
+  (`RESET_PASSWORD_LOCK_TIME`), así dos tareas simultáneas mandan un solo correo. Si después falla el envío o se supera
+  el global, el usuario queda bloqueado ese tiempo.
+- **Settings (env, `saleor/settings.py`; un límite en `0` desactiva ese tope):**
+  `ACCOUNT_EMAIL_THROTTLE_WINDOW` (`10 minutes`, ventana fija), `ACCOUNT_REGISTER_NETWORK_LIMIT` (10),
+  `ACCOUNT_REGISTER_GLOBAL_LIMIT` (200), `PASSWORD_RESET_NETWORK_LIMIT` (15), `PASSWORD_RESET_GLOBAL_LIMIT` (200).
+  En `saleor/tests/settings.py` los cuatro límites van a 0.
+- **Requisito:** `CACHE_URL` apuntando a Redis en web **y** worker (**no verificado** en producción). Si la caché
+  falla, la operación falla (cerrado). Sin cambios en `schema.graphql` ni migraciones.
+- **Tests:** `saleor/account/tests/test_throttling_email_requests.py`,
+  `saleor/graphql/account/tests/mutations/account/test_account_register_throttling.py` y
+  `saleor/graphql/account/tests/mutations/authentication/test_request_password_reset_throttling.py`.
+- **Al sincronizar upstream:** conservar los tres enganches; si upstream añade su freno, retirar el nuestro.
+- **Riesgos aceptados:** quien agote un cupo global impide registros, o correos de recuperación, de todos durante la
+  ventana; los usuarios tras una misma red comparten cupo.
+
+---
+
 ## B-2606 — `passwordChange` y `requestEmailChange` frenan los intentos con la contraseña actual (2026-11-27)
 
 **Cambio divergente de upstream.** Upstream comprueba la contraseña actual sin límite en `passwordChange`
@@ -33,7 +65,8 @@ bruta.
 - **Riesgos aceptados:** quien tiene el token puede impedir al dueño cambiar la clave o el correo hasta 1 h,
   renovable (queda la recuperación por correo). Fijar una clave sin tener contraseña usable solo exige sesión (revisar si se activa OIDC).
   El freno depende de una caché compartida (Redis) en producción, **no verificado**.
-- **Pendiente (reporte hermano):** `accountRegister` y `requestPasswordReset` siguen sin tope por red ni global.
+- **Pendiente (reporte hermano):** resuelto en B-2607 (sección de arriba): `accountRegister` y `requestPasswordReset`
+  ya tienen tope.
 
 ---
 

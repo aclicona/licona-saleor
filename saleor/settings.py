@@ -1145,6 +1145,20 @@ RESET_PASSWORD_LOCK_TIME = parse(
     os.environ.get("RESET_PASSWORD_LOCK_TIME", "15 minutes")
 )
 
+# B-2607: caps on `accountRegister` and `requestPasswordReset`, counted in fixed
+# windows. A limit of 0 disables that cap.
+ACCOUNT_EMAIL_THROTTLE_WINDOW = parse(
+    os.environ.get("ACCOUNT_EMAIL_THROTTLE_WINDOW", "10 minutes")
+)
+ACCOUNT_REGISTER_NETWORK_LIMIT = int(
+    os.environ.get("ACCOUNT_REGISTER_NETWORK_LIMIT", 10)
+)
+ACCOUNT_REGISTER_GLOBAL_LIMIT = int(
+    os.environ.get("ACCOUNT_REGISTER_GLOBAL_LIMIT", 200)
+)
+PASSWORD_RESET_NETWORK_LIMIT = int(os.environ.get("PASSWORD_RESET_NETWORK_LIMIT", 15))
+PASSWORD_RESET_GLOBAL_LIMIT = int(os.environ.get("PASSWORD_RESET_GLOBAL_LIMIT", 200))
+
 # Lock time for request confirmation email mutation per user
 CONFIRMATION_EMAIL_LOCK_TIME = parse(
     os.environ.get("CONFIRMATION_EMAIL_LOCK_TIME", "15 minutes")

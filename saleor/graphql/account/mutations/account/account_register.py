@@ -7,6 +7,7 @@ from django.db import IntegrityError, transaction
 from .....account import models
 from .....account.error_codes import AccountErrorCode
 from .....account.tasks import finish_creating_user
+from .....account.throttling_email_requests import check_account_register_throttling
 from .....account.utils import RequestorAwareContext, get_default_customer_type
 from .....core.utils.url import validate_storefront_url
 from .....webhook.event_types import WebhookEventAsyncType
@@ -174,6 +175,7 @@ class AccountRegister(DeprecatedModelMutation):
 
     @classmethod
     def perform_mutation(cls, _root, info: ResolveInfo, /, **data):
+        check_account_register_throttling(info.context)  # B-2607
         instance = models.User()
         data = data.get("input")
         cleaned_input = cls.clean_input(info, instance, data)
