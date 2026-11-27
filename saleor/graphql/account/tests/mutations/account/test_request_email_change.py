@@ -411,8 +411,7 @@ def test_request_email_change_every_alias_counts(
         "{ errors { code } }"
     )
     aliases = " ".join(
-        f"{alias}: {call % (alias, channel_PLN.slug)}"
-        for alias in ("first", "second")
+        f"{alias}: {call % (alias, channel_PLN.slug)}" for alias in ("first", "second")
     )
     query = f"mutation {{ {aliases} }}"
 
