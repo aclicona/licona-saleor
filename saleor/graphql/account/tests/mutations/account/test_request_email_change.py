@@ -375,6 +375,7 @@ def test_request_email_change_correct_password_clears_throttling(
 @pytest.fixture
 def email_caps(settings, throttling_cache):
     settings.EMAIL_CHANGE_USER_LIMIT = 1
+    settings.EMAIL_CHANGE_RECIPIENT_LIMIT = 10
     settings.EMAIL_CHANGE_GLOBAL_LIMIT = 10
     return throttling_cache
 
@@ -447,6 +448,29 @@ def test_request_email_change_over_global_limit_sends_nothing(
     assert mocked_event.call_count == 1
 
 
+@patch("saleor.plugins.manager.PluginsManager.account_change_email_requested")
+def test_request_email_change_over_recipient_limit_sends_nothing(
+    mocked_event,
+    user_api_client,
+    user2_api_client,
+    channel_PLN,
+    email_caps,
+    settings,
+):
+    # given
+    settings.EMAIL_CHANGE_RECIPIENT_LIMIT = 1
+    _request_email_change(user_api_client, "password", channel_PLN.slug)
+
+    # when
+    data = _request_email_change(user2_api_client, "password", channel_PLN.slug)
+
+    # then
+    assert data["errors"][0]["code"] == AccountErrorCode.LOGIN_ATTEMPT_DELAYED.name
+    assert data["errors"][0]["field"] is None
+    assert "new_email@example.com" not in data["errors"][0]["message"]
+    assert mocked_event.call_count == 1
+
+
 @pytest.mark.parametrize(
     ("password", "redirect_url", "channel"),
     [
@@ -475,6 +499,7 @@ def test_request_email_change_without_send_does_not_consume_the_caps(
     user_pk = user_api_client.user.pk
     assert email_caps.get(f"email_change:count:user:{user_pk}") is None
     assert email_caps.get("email_change:count:global") is None
+    assert not [key for key in email_caps._cache if "email_change:" in key]
 
 
 @patch("saleor.account.throttling_email_requests.cache")

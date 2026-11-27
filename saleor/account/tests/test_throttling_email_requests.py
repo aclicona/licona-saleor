@@ -1,9 +1,11 @@
 """B-2607 and B-2611: caps on the mutations that create accounts or send emails."""
 
 import datetime
+import hashlib
 import os
 import subprocess
 import sys
+from functools import partial
 from unittest.mock import patch
 
 import pytest
@@ -28,6 +30,7 @@ IP = "123.123.123.123"
 OTHER_IP = "124.124.124.124"
 REDIRECT_URL = "https://www.example.com"
 WINDOW = 600
+CHANGE_WINDOW = 3600
 CONTEXT_DATA = {"user_pk": None, "app_pk": None}
 
 NETWORK_CHECKS = [
@@ -271,6 +274,7 @@ LIMIT_SETTINGS = [
     "PASSWORD_RESET_NETWORK_LIMIT",
     "PASSWORD_RESET_GLOBAL_LIMIT",
     "EMAIL_CHANGE_USER_LIMIT",
+    "EMAIL_CHANGE_RECIPIENT_LIMIT",
     "EMAIL_CHANGE_GLOBAL_LIMIT",
 ]
 
@@ -294,16 +298,25 @@ def test_throttle_limit_accepts_zero_and_positive(value, monkeypatch):
     assert limit == value
 
 
-@pytest.mark.parametrize("name", LIMIT_SETTINGS)
-def test_settings_fail_to_load_with_a_negative_limit(name):
-    result = subprocess.run(
-        [sys.executable, "-c", "import saleor.settings"],
-        env={**os.environ, name: "-1"},
+def _load_settings(env, code="import saleor.settings"):
+    clean = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("EMAIL_CHANGE_")
+    }
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        env={**clean, **env},
         capture_output=True,
         text=True,
         check=False,
         timeout=120,
     )
+
+
+@pytest.mark.parametrize("name", LIMIT_SETTINGS)
+def test_settings_fail_to_load_with_a_negative_limit(name):
+    result = _load_settings({name: "-1"})
 
     assert result.returncode != 0
     assert f"ImproperlyConfigured: {name}" in result.stderr
@@ -385,84 +398,215 @@ def test_reset_task_without_real_send_does_not_consume_global(
     assert mocked_notify.call_count == 1
 
 
-# B-2611: caps on `requestEmailChange`, per user and global
+# B-2611: caps on `requestEmailChange`: per user, recipient and global
 
 
-def test_email_change_user_limit_and_window_expiry(settings, throttling_cache):
+@pytest.fixture
+def change_cache(throttling_cache, settings):
+    settings.EMAIL_CHANGE_THROTTLE_WINDOW = CHANGE_WINDOW
+    return throttling_cache
+
+
+def _check_change(user_pk, new_email=None):
+    check_email_change_throttling(
+        User(pk=user_pk), new_email or f"new{user_pk}@example.com"
+    )
+
+
+def _recipient_key(address):
+    digest = hashlib.sha256(address.encode()).hexdigest()
+    return f"email_change:count:recipient:{digest}"
+
+
+def test_email_change_user_limit_and_window_expiry(settings, change_cache):
     settings.EMAIL_CHANGE_USER_LIMIT = 2
-    user = User(pk=1)
 
     with freeze_time(NOW) as frozen_time:
-        check_email_change_throttling(user)
-        frozen_time.tick(datetime.timedelta(seconds=WINDOW - 1))
-        check_email_change_throttling(user)
-        _assert_delayed(check_email_change_throttling, user)
+        _check_change(1)
+        frozen_time.tick(datetime.timedelta(seconds=CHANGE_WINDOW - 1))
+        _check_change(1)
+        _assert_delayed(_check_change, 1)
         # another user keeps its own quota
-        check_email_change_throttling(User(pk=2))
+        _check_change(2)
 
         # fixed window: rejected calls do not extend it
         frozen_time.tick(datetime.timedelta(seconds=2))
-        check_email_change_throttling(user)
+        _check_change(1)
 
 
 def test_email_change_global_limit_across_users_has_the_same_error(
-    settings, throttling_cache
+    settings, change_cache
 ):
     settings.EMAIL_CHANGE_USER_LIMIT = 1
     settings.EMAIL_CHANGE_GLOBAL_LIMIT = 1
-    check_email_change_throttling(User(pk=1))
+    _check_change(1)
 
-    user_error = _assert_delayed(check_email_change_throttling, User(pk=1))
+    user_error = _assert_delayed(_check_change, 1)
     with patch(
         "saleor.account.throttling_email_requests.logger.error"
     ) as mocked_logger_error:
-        global_error = _assert_delayed(check_email_change_throttling, User(pk=2))
+        global_error = _assert_delayed(_check_change, 2)
 
     assert global_error.message == user_error.message
     mocked_logger_error.assert_called_once()
 
 
-def test_email_change_user_rejection_does_not_consume_global(
-    settings, throttling_cache
-):
+def test_email_change_user_rejection_does_not_consume_global(settings, change_cache):
     settings.EMAIL_CHANGE_USER_LIMIT = 1
     settings.EMAIL_CHANGE_GLOBAL_LIMIT = 10
-    check_email_change_throttling(User(pk=1))
+    _check_change(1)
 
     for _ in range(3):
-        _assert_delayed(check_email_change_throttling, User(pk=1))
+        _assert_delayed(_check_change, 1)
 
-    assert throttling_cache.get("email_change:count:user:1") == 4
-    assert throttling_cache.get("email_change:count:global") == 1
+    assert change_cache.get("email_change:count:user:1") == 4
+    assert change_cache.get("email_change:count:global") == 1
 
 
-def test_email_change_zero_user_limit_keeps_the_global_one(settings, throttling_cache):
+def test_email_change_zero_user_limit_keeps_the_global_one(settings, change_cache):
     settings.EMAIL_CHANGE_USER_LIMIT = 0
     settings.EMAIL_CHANGE_GLOBAL_LIMIT = 1
-    check_email_change_throttling(User(pk=1))
+    _check_change(1)
 
-    _assert_delayed(check_email_change_throttling, User(pk=2))
+    _assert_delayed(_check_change, 2)
 
 
 @patch("saleor.account.throttling_email_requests.cache")
 def test_email_change_zero_limits_disable_the_throttling(mocked_cache, settings):
     settings.EMAIL_CHANGE_USER_LIMIT = 0
+    settings.EMAIL_CHANGE_RECIPIENT_LIMIT = 0
     settings.EMAIL_CHANGE_GLOBAL_LIMIT = 0
 
-    check_email_change_throttling(User(pk=1))
+    _check_change(1)
 
     assert not mocked_cache.mock_calls
 
 
 @pytest.mark.parametrize(
-    "limit_setting", ["EMAIL_CHANGE_USER_LIMIT", "EMAIL_CHANGE_GLOBAL_LIMIT"]
+    "limit_setting",
+    [
+        "EMAIL_CHANGE_USER_LIMIT",
+        "EMAIL_CHANGE_RECIPIENT_LIMIT",
+        "EMAIL_CHANGE_GLOBAL_LIMIT",
+    ],
 )
 @patch("saleor.account.throttling_email_requests.cache")
 def test_email_change_cache_failure_propagates(mocked_cache, limit_setting, settings):
     settings.EMAIL_CHANGE_USER_LIMIT = 0
+    settings.EMAIL_CHANGE_RECIPIENT_LIMIT = 0
     settings.EMAIL_CHANGE_GLOBAL_LIMIT = 0
     setattr(settings, limit_setting, 1)
     mocked_cache.add.side_effect = ConnectionError
 
     with pytest.raises(ConnectionError):
-        check_email_change_throttling(User(pk=1))
+        _check_change(1)
+
+
+def test_email_change_recipient_limit_across_users(settings, change_cache):
+    settings.EMAIL_CHANGE_RECIPIENT_LIMIT = 2
+    victim = "victim@example.com"
+
+    with freeze_time(NOW) as frozen_time:
+        _check_change(1, victim)
+        _check_change(2, victim)
+        _assert_delayed(partial(_check_change, new_email=victim), 3)
+        # another recipient keeps its own quota
+        _check_change(3, "other@example.com")
+
+        frozen_time.tick(datetime.timedelta(seconds=CHANGE_WINDOW + 1))
+        _check_change(3, victim)
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        "VICTIM@Example.COM",
+        "  victim@example.com  ",
+        "<victim@example.com>",
+        "Someone Else <victim@example.com>",
+        "victim@example.com (note)",
+    ],
+)
+def test_email_change_recipient_is_normalized(variant, settings, change_cache):
+    settings.EMAIL_CHANGE_RECIPIENT_LIMIT = 1
+    _check_change(1, "victim@example.com")
+
+    _assert_delayed(partial(_check_change, new_email=variant), 2)
+
+
+def test_email_change_recipient_key_is_hashed(settings, change_cache):
+    settings.EMAIL_CHANGE_RECIPIENT_LIMIT = 1
+
+    _check_change(1, "victim@example.com")
+
+    assert change_cache.get(_recipient_key("victim@example.com")) == 1
+    assert not [key for key in change_cache._cache if "victim" in key]
+
+
+def test_email_change_caps_are_checked_in_order(settings, change_cache):
+    settings.EMAIL_CHANGE_USER_LIMIT = 1
+    settings.EMAIL_CHANGE_RECIPIENT_LIMIT = 1
+    settings.EMAIL_CHANGE_GLOBAL_LIMIT = 10
+    _check_change(1, "first@example.com")
+
+    # rejected by the user cap: neither the recipient nor the global are consumed
+    _assert_delayed(partial(_check_change, new_email="second@example.com"), 1)
+    assert change_cache.get(_recipient_key("second@example.com")) is None
+    # rejected by the recipient cap: the global is not consumed
+    _assert_delayed(partial(_check_change, new_email="first@example.com"), 2)
+
+    assert change_cache.get("email_change:count:global") == 1
+
+
+def test_email_change_global_rejection_consumes_user_and_recipient(
+    settings, change_cache
+):
+    settings.EMAIL_CHANGE_USER_LIMIT = 5
+    settings.EMAIL_CHANGE_RECIPIENT_LIMIT = 5
+    settings.EMAIL_CHANGE_GLOBAL_LIMIT = 1
+    _check_change(1)
+
+    _assert_delayed(_check_change, 2)
+
+    assert change_cache.get("email_change:count:user:2") == 1
+    assert change_cache.get(_recipient_key("new2@example.com")) == 1
+
+
+def test_email_change_window_does_not_change_the_register_one(
+    rf, settings, change_cache
+):
+    settings.EMAIL_CHANGE_USER_LIMIT = 1
+    settings.PASSWORD_RESET_NETWORK_LIMIT = 1
+    request = _request(rf, IP)
+
+    with freeze_time(NOW) as frozen_time:
+        _check_change(1)
+        check_password_reset_throttling(request)
+        frozen_time.tick(datetime.timedelta(seconds=WINDOW + 1))
+
+        check_password_reset_throttling(request)
+        _assert_delayed(_check_change, 1)
+
+
+@pytest.mark.parametrize("value", ["0", "1.5 seconds", "soon", ""])
+def test_invalid_email_change_window_is_rejected(value):
+    result = _load_settings({"EMAIL_CHANGE_THROTTLE_WINDOW": value})
+
+    assert result.returncode != 0
+    assert "ImproperlyConfigured: EMAIL_CHANGE_THROTTLE_WINDOW" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("env", "window"), [({}, 3600), ({"EMAIL_CHANGE_THROTTLE_WINDOW": "7200"}, 7200)]
+)
+def test_email_change_settings(env, window):
+    code = (
+        "import saleor.settings as s; print(s.EMAIL_CHANGE_THROTTLE_WINDOW, "
+        "s.EMAIL_CHANGE_USER_LIMIT, s.EMAIL_CHANGE_RECIPIENT_LIMIT, "
+        "s.EMAIL_CHANGE_GLOBAL_LIMIT)"
+    )
+
+    result = _load_settings(env, code)
+
+    assert result.returncode == 0
+    assert result.stdout.split()[-4:] == [str(window), "3", "3", "20"]

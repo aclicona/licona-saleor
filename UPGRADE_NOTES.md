@@ -8,7 +8,7 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
-## B-2611 — tope por usuario y global en `requestEmailChange` (2026-11-27)
+## B-2611 — topes por usuario, destinatario y global en `requestEmailChange` (2026-11-27)
 
 **Cambio divergente de upstream.** `requestEmailChange` envía correo a la dirección `newEmail` que se pida. Upstream no
 limita la frecuencia (el freno de B-2606 solo cuenta contraseñas fallidas), así que una cuenta propia permite enviar
@@ -17,22 +17,33 @@ correo repetido a terceros.
 - **Arreglo:** `check_email_change_throttling` en `saleor/account/throttling_email_requests.py` (módulo de B-2607) y un
   enganche marcado `# B-2611` en `saleor/graphql/account/mutations/account/request_email_change.py`, justo antes de
   enviar la notificación y el evento.
-- **Qué se cuenta:** solo las llamadas que van a enviar (contraseña correcta, `redirectUrl` y canal válidos); cada alias
-  cuenta. Una dirección ya usada por otra cuenta también se envía (anti-enumeración de upstream), así que también
-  cuenta. El global solo suma si el usuario no fue rechazado.
-- **Respuesta:** superado cualquiera de los dos topes, `LOGIN_ATTEMPT_DELAYED` sin campo y con mensaje genérico, sin
+- **Orden:** usuario, destinatario y global. Un rechazo no gasta los topes siguientes.
+- **Un rechazo del global sí gasta cupo** del usuario y del destinatario (se cuentan antes), aunque no se envíe nada.
+- **Qué se cuenta:** solo las llamadas que pasan las validaciones (contraseña correcta, `redirectUrl` y canal válidos);
+  cada alias cuenta. Una dirección ya usada por otra cuenta también se envía (anti-enumeración de upstream), así que
+  también cuenta. Si el envío falla después, el cupo queda gastado.
+- **Destinatario:** la clave es el sha256 de la dirección en minúsculas, extraída de nombre visible, `<>` o comentario;
+  el correo no aparece en claro en claves ni logs. No unifica alias del proveedor (`+etiqueta`, puntos de Gmail) ni
+  otras formas equivalentes de una misma dirección.
+- **Respuesta:** superado cualquier tope, `LOGIN_ATTEMPT_DELAYED` sin campo y con el mismo mensaje genérico, sin
   enviar notificación ni webhook; el global deja además un `logger.error`. A diferencia del global de recuperación de
   contraseña, aquí se puede avisar: la mutación exige sesión y la respuesta no depende de que exista ninguna cuenta.
-- **Settings (env, `saleor/settings.py`; `0` desactiva el tope, negativo = `ImproperlyConfigured`):**
-  `EMAIL_CHANGE_USER_LIMIT` (3) y `EMAIL_CHANGE_GLOBAL_LIMIT` (100), sobre la ventana `ACCOUNT_EMAIL_THROTTLE_WINDOW`
-  de B-2607. En `saleor/tests/settings.py` van a 0. Sin cambios en `schema.graphql` ni migraciones.
-- **Requisito:** `CACHE_URL` apuntando a Redis (**no verificado** en producción). Si la caché falla, la operación falla
-  y no se envía.
+- **Settings (env, `saleor/settings.py`):** `EMAIL_CHANGE_THROTTLE_WINDOW` (3600 s, propia de esta mutación; la de
+  B-2607 no cambia; las dos ventanas admiten segundos sin unidad), `EMAIL_CHANGE_USER_LIMIT` (3), `EMAIL_CHANGE_RECIPIENT_LIMIT` (3) y `EMAIL_CHANGE_GLOBAL_LIMIT`
+  (20). Un límite en `0` desactiva ese tope; el arranque falla con `ImproperlyConfigured` si un límite es negativo o la
+  ventana no es un entero mayor que 0. En `saleor/tests/settings.py` los tres límites van a 0. Sin cambios en
+  `schema.graphql` ni migraciones.
+- **Ventana fija:** empieza con la primera llamada contada y los rechazos no la alargan; en el cambio de ventana se
+  puede enviar en ráfaga hasta el doble del límite.
+- **Requisito:** los topes solo valen con una caché **Redis compartida** (`CACHE_URL`) por todas las réplicas; con una
+  caché en memoria cada proceso cuenta por separado (**no verificado** en producción). Si la caché falla, la operación
+  falla y no se envía.
 - **Tests:** `saleor/account/tests/test_throttling_email_requests.py` y
   `saleor/graphql/account/tests/mutations/account/test_request_email_change.py`.
 - **Al sincronizar upstream:** conservar el enganche; si upstream añade su freno, retirar el nuestro.
-- **Riesgos aceptados:** quien agote el cupo global (con 34 cuentas, a los límites por defecto) impide los cambios de
-  correo de todos durante la ventana; por usuario, el tope sigue permitiendo 3 correos cada 10 minutos.
+- **Riesgos aceptados:** con 7 cuentas (a los límites por defecto) se agota el cupo global y nadie puede cambiar su
+  correo durante la ventana; quien pida 3 veces una dirección impide que otros la pidan durante la ventana, y el
+  rechazo deja ver que esa dirección se pidió hace poco.
 
 ---
 

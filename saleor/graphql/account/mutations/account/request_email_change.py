@@ -111,7 +111,7 @@ class RequestEmailChange(BaseMutation):
             token_type=JWT_CONFIRM_CHANGE_EMAIL_TYPE,
         )
         # B-2611: counted once every validation passed, right before sending
-        check_email_change_throttling(user)
+        check_email_change_throttling(user, new_email)
         manager = get_plugin_manager_promise(info.context).get()
         params = urlencode({"token": token})
 

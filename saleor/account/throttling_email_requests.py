@@ -3,13 +3,15 @@
 Divergence from upstream (B-2607 and B-2611, see UPGRADE_NOTES.md): upstream lets
 anyone call `accountRegister` and `requestPasswordReset`, and any logged in user call
 `requestEmailChange` (which emails whatever address is given), without limit. Calls
-are counted in fixed windows per network (see `get_throttling_network`) or per user,
-and globally, under keys of their own, so they never interact with the login
-throttling. A limit of 0 disables that cap. A cache failure propagates, so nothing is
-created or sent without the throttling.
+are counted in fixed windows per network (see `get_throttling_network`), per user or
+per recipient, and globally, under keys of their own, so they never interact with the
+login throttling. A limit of 0 disables that cap. A cache failure propagates, so
+nothing is created or sent without the throttling.
 """
 
+import hashlib
 import logging
+from email.utils import parseaddr
 
 from django.conf import settings
 from django.core.cache import cache
@@ -58,17 +60,29 @@ def is_password_reset_global_limit_exceeded() -> bool:
     )
 
 
-def check_email_change_throttling(user: models.User) -> None:
-    """Count a `requestEmailChange` email about to be sent; raise if over a cap."""
+def check_email_change_throttling(user: models.User, new_email: str) -> None:
+    """Count a `requestEmailChange` email about to be sent; raise if over a cap.
+
+    The caps are checked per user, per recipient and globally, in that order, so a
+    rejected call does not consume the following ones.
+    """
+    window = settings.EMAIL_CHANGE_THROTTLE_WINDOW
     if _is_over_limit(
         get_cache_key_user(EMAIL_CHANGE_SCOPE, user.pk),
         settings.EMAIL_CHANGE_USER_LIMIT,
+        window,
     ):
         raise _too_many_requests_error()
-    # checked after the user one, so rejected users do not consume it
+    if _is_over_limit(
+        get_cache_key_recipient(EMAIL_CHANGE_SCOPE, new_email),
+        settings.EMAIL_CHANGE_RECIPIENT_LIMIT,
+        window,
+    ):
+        raise _too_many_requests_error()
     if _is_over_limit(
         get_cache_key_global(EMAIL_CHANGE_SCOPE),
         settings.EMAIL_CHANGE_GLOBAL_LIMIT,
+        window,
     ):
         logger.error("Email change global limit exceeded, the email is not sent.")
         raise _too_many_requests_error()
@@ -86,6 +100,17 @@ def get_cache_key_user(scope: str, user_id) -> str:
     return f"{scope}:count:user:{user_id}"
 
 
+def get_cache_key_recipient(scope: str, email: str) -> str:
+    """Return the key of a recipient, which never holds the address in clear text.
+
+    A display name, angle brackets or a comment do not make it another recipient.
+    """
+    email = email.strip()
+    address = parseaddr(email)[1] or email
+    digest = hashlib.sha256(address.lower().encode()).hexdigest()
+    return f"{scope}:count:recipient:{digest}"
+
+
 def _check_network_limit(request, scope: str, limit: int) -> None:
     if limit == 0:
         return
@@ -100,15 +125,17 @@ def _check_network_limit(request, scope: str, limit: int) -> None:
         raise _too_many_requests_error()
 
 
-def _is_over_limit(key: str, limit: int) -> bool:
+def _is_over_limit(key: str, limit: int, window: int | None = None) -> bool:
+    """Count a call and check the limit; the window defaults to the B-2607 one."""
     if limit == 0:
         return False
-    return _increment_in_window(key) > limit
+    if window is None:
+        window = settings.ACCOUNT_EMAIL_THROTTLE_WINDOW
+    return _increment_in_window(key, window) > limit
 
 
-def _increment_in_window(key: str) -> int:
+def _increment_in_window(key: str, window: int) -> int:
     """Increment the counter of a fixed window, which starts with the first call."""
-    window = settings.ACCOUNT_EMAIL_THROTTLE_WINDOW
     cache.add(key, 0, timeout=window)
     try:
         count = cache.incr(key)

@@ -1150,7 +1150,8 @@ RESET_PASSWORD_LOCK_TIME = parse(
 # `requestEmailChange`, counted in fixed windows. A limit of 0 disables that cap.
 def get_throttle_window_from_env(name: str, default_value: str) -> int:
     value = os.environ.get(name, default_value)
-    seconds = parse(value)
+    # a bare integer is a number of seconds, `parse` only reads values with units
+    seconds = int(value) if value.isdecimal() else parse(value)
     if not isinstance(seconds, int) or seconds <= 0:
         raise ImproperlyConfigured(f"{name} must be a positive number of seconds.")
     return seconds
@@ -1178,10 +1179,15 @@ PASSWORD_RESET_NETWORK_LIMIT = get_throttle_limit_from_env(
 PASSWORD_RESET_GLOBAL_LIMIT = get_throttle_limit_from_env(
     "PASSWORD_RESET_GLOBAL_LIMIT", 200
 )
-EMAIL_CHANGE_USER_LIMIT = get_throttle_limit_from_env("EMAIL_CHANGE_USER_LIMIT", 3)
-EMAIL_CHANGE_GLOBAL_LIMIT = get_throttle_limit_from_env(
-    "EMAIL_CHANGE_GLOBAL_LIMIT", 100
+# B-2611: `requestEmailChange` has a window of its own (seconds).
+EMAIL_CHANGE_THROTTLE_WINDOW = get_throttle_window_from_env(
+    "EMAIL_CHANGE_THROTTLE_WINDOW", "3600"
 )
+EMAIL_CHANGE_USER_LIMIT = get_throttle_limit_from_env("EMAIL_CHANGE_USER_LIMIT", 3)
+EMAIL_CHANGE_RECIPIENT_LIMIT = get_throttle_limit_from_env(
+    "EMAIL_CHANGE_RECIPIENT_LIMIT", 3
+)
+EMAIL_CHANGE_GLOBAL_LIMIT = get_throttle_limit_from_env("EMAIL_CHANGE_GLOBAL_LIMIT", 20)
 
 # Lock time for request confirmation email mutation per user
 CONFIRMATION_EMAIL_LOCK_TIME = parse(
