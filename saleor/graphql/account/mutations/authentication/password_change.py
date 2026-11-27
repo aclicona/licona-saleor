@@ -8,6 +8,9 @@ from django.core.exceptions import ValidationError
 from .....account import events as account_events
 from .....account import models
 from .....account.error_codes import AccountErrorCode
+from .....account.throttling_password_change import (  # B-2606
+    check_old_password_with_throttling,
+)
 from .....permission.auth_filters import AuthorizationFilters
 from ....core import ResolveInfo
 from ....core.doc_category import DOC_CATEGORY_USERS
@@ -63,7 +66,8 @@ class PasswordChange(BaseMutation):
 
             if user.has_usable_password():
                 cls.raise_invalid_credentials()
-        elif not user.check_password(old_password):
+        # B-2606: throttled check, replaces `user.check_password(old_password)`
+        elif not check_old_password_with_throttling(user, old_password):
             cls.raise_invalid_credentials()
         try:
             password_validation.validate_password(new_password, user)

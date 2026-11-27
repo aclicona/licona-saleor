@@ -8,6 +8,30 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-2606 — `passwordChange` frena los intentos con la contraseña actual (2026-11-27)
+
+**Cambio divergente de upstream.** Upstream comprueba `oldPassword` sin límite, así que quien tenga un token de acceso
+puede adivinar la contraseña actual a fuerza bruta.
+
+- **Arreglo:** módulo nuevo `saleor/account/throttling_password_change.py` (reutiliza los helpers de
+  `saleor/account/throttling.py`) y su llamada, marcada `# B-2606`, en
+  `saleor/graphql/account/mutations/authentication/password_change.py` en lugar de `user.check_password(old_password)`.
+  Claves solo por usuario (`password_change:fail:user:{pk}`, `password_change:block:user:{pk}`), sin IP y sin nada
+  compartido con `login:*`. Espera de 1, 2, 4… s y 1 h desde el décimo fallo; el contador dura 2 h desde el último
+  fallo. Un intento bloqueado devuelve `LOGIN_ATTEMPT_DELAYED` (sin campo) sin comprobar la clave; acertar la clave
+  actual limpia contador y bloqueo aunque la nueva no valide. Si la caché falla, la mutación falla (cerrado). Sin
+  `oldPassword` la conducta es la de upstream y no toca el freno. Sin cambios en `schema.graphql`.
+- **Tests:** `saleor/account/tests/test_throttling_password_change.py` y los casos B-2606 de
+  `saleor/graphql/account/tests/mutations/authentication/test_password_change.py`.
+- **Al sincronizar upstream:** conservar la llamada en `password_change.py`; si upstream añade su freno, retirar el
+  nuestro.
+- **Riesgos aceptados:** quien tiene el token puede impedir al dueño cambiar la clave hasta 1 h, renovable (queda la
+  recuperación por correo). Fijar una clave sin tener contraseña usable solo exige sesión (revisar si se activa OIDC).
+  El freno depende de una caché compartida (Redis) en producción, **no verificado**.
+- **Pendiente (reporte hermano):** `accountRegister` y `requestPasswordReset` siguen sin tope por red ni global.
+
+---
+
 ## B-2587 — el freno de login cuenta por red: /64 en IPv6 (2026-11-26)
 
 **Cambio divergente de upstream** en `saleor/account/throttling.py`. Upstream usa la dirección completa del cliente en
