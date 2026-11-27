@@ -1,14 +1,18 @@
 """B-2607: caps on `accountRegister` and `requestPasswordReset`."""
 
 import datetime
+import os
+import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
 from django.core.cache import cache
-from django.core.exceptions import ValidationError
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.utils import timezone
 from freezegun import freeze_time
 
+from ... import settings as saleor_settings
 from ..error_codes import AccountErrorCode
 from ..models import User
 from ..tasks import trigger_send_password_reset_notification
@@ -207,7 +211,99 @@ def test_counter_expiring_between_add_and_incr_is_retried_once(
     check_password_reset_throttling(_request(rf, IP))
 
     assert mocked_cache.add.call_count == 2
+
+
+def test_counter_recreated_without_expiry_still_expires(rf, settings, throttling_cache):
+    # Django's Redis `incr` is not atomic: a key expiring inside it is recreated
+    # without expiry, and 1 is returned.
+    settings.PASSWORD_RESET_NETWORK_LIMIT = 1
+    request = _request(rf, IP)
+
+    def recreate_without_expiry(key):
+        throttling_cache.set(key, 1, timeout=None)
+        return 1
+
+    with freeze_time(NOW) as frozen_time:
+        with patch.object(
+            throttling_cache, "incr", side_effect=recreate_without_expiry
+        ):
+            check_password_reset_throttling(request)
+        _assert_delayed(check_password_reset_throttling, request)
+
+        frozen_time.tick(datetime.timedelta(seconds=WINDOW + 1))
+        check_password_reset_throttling(request)
+
+
+@patch("saleor.account.throttling_email_requests.cache")
+def test_window_is_not_extended_after_the_first_call(mocked_cache, rf, settings):
+    settings.PASSWORD_RESET_NETWORK_LIMIT = 5
+    mocked_cache.incr.return_value = 2
+
+    check_password_reset_throttling(_request(rf, IP))
+
     assert not mocked_cache.touch.called
+
+
+@pytest.mark.parametrize("value", ["0", "0 minutes", "1.5 seconds", "soon", ""])
+def test_invalid_throttle_window_is_rejected(value, monkeypatch):
+    monkeypatch.setenv("ACCOUNT_EMAIL_THROTTLE_WINDOW", value)
+
+    with pytest.raises(ImproperlyConfigured, match="ACCOUNT_EMAIL_THROTTLE_WINDOW"):
+        saleor_settings.get_throttle_window_from_env(
+            "ACCOUNT_EMAIL_THROTTLE_WINDOW", "10 minutes"
+        )
+
+
+def test_throttle_window_is_read_in_seconds(monkeypatch):
+    monkeypatch.setenv("ACCOUNT_EMAIL_THROTTLE_WINDOW", "2 minutes")
+
+    window = saleor_settings.get_throttle_window_from_env(
+        "ACCOUNT_EMAIL_THROTTLE_WINDOW", "10 minutes"
+    )
+
+    assert window == 120
+
+
+LIMIT_SETTINGS = [
+    "ACCOUNT_REGISTER_NETWORK_LIMIT",
+    "ACCOUNT_REGISTER_GLOBAL_LIMIT",
+    "PASSWORD_RESET_NETWORK_LIMIT",
+    "PASSWORD_RESET_GLOBAL_LIMIT",
+]
+
+
+@pytest.mark.parametrize("name", LIMIT_SETTINGS)
+def test_negative_throttle_limit_is_rejected(name, monkeypatch):
+    monkeypatch.setenv(name, "-1")
+
+    with pytest.raises(ImproperlyConfigured, match=name):
+        saleor_settings.get_throttle_limit_from_env(name, 10)
+
+
+@pytest.mark.parametrize("value", [0, 7])
+def test_throttle_limit_accepts_zero_and_positive(value, monkeypatch):
+    monkeypatch.setenv("PASSWORD_RESET_NETWORK_LIMIT", str(value))
+
+    limit = saleor_settings.get_throttle_limit_from_env(
+        "PASSWORD_RESET_NETWORK_LIMIT", 10
+    )
+
+    assert limit == value
+
+
+@pytest.mark.parametrize("name", LIMIT_SETTINGS)
+def test_settings_fail_to_load_with_a_negative_limit(name):
+    result = subprocess.run(
+        [sys.executable, "-c", "import saleor.settings"],
+        env={**os.environ, name: "-1"},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+
+    assert result.returncode != 0
+    assert f"ImproperlyConfigured: {name}" in result.stderr
 
 
 @pytest.mark.parametrize(("check", "limit_setting"), NETWORK_CHECKS)

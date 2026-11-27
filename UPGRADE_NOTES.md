@@ -28,7 +28,10 @@ mandan correo.
 - **Settings (env, `saleor/settings.py`; un límite en `0` desactiva ese tope):**
   `ACCOUNT_EMAIL_THROTTLE_WINDOW` (`10 minutes`, ventana fija), `ACCOUNT_REGISTER_NETWORK_LIMIT` (10),
   `ACCOUNT_REGISTER_GLOBAL_LIMIT` (200), `PASSWORD_RESET_NETWORK_LIMIT` (15), `PASSWORD_RESET_GLOBAL_LIMIT` (200).
-  En `saleor/tests/settings.py` los cuatro límites van a 0.
+  En `saleor/tests/settings.py` los cuatro límites van a 0. El arranque falla con `ImproperlyConfigured` si la
+  ventana no es un número entero de segundos mayor que 0 o si algún límite es negativo.
+- **Contador sin caducidad:** el `incr` de Redis en Django no es atómico y puede recrear sin caducidad una clave que
+  vence en ese instante; cuando `incr` devuelve 1 se le vuelve a poner la ventana (`cache.touch`).
 - **Requisito:** `CACHE_URL` apuntando a Redis en web **y** worker (**no verificado** en producción). Si la caché
   falla, la operación falla (cerrado). Sin cambios en `schema.graphql` ni migraciones.
 - **Tests:** `saleor/account/tests/test_throttling_email_requests.py`,

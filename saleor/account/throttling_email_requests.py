@@ -83,11 +83,16 @@ def _increment_in_window(key: str) -> int:
     window = settings.ACCOUNT_EMAIL_THROTTLE_WINDOW
     cache.add(key, 0, timeout=window)
     try:
-        return cache.incr(key)
+        count = cache.incr(key)
     except ValueError:
         # the window expired between both calls: start the next one
         cache.add(key, 0, timeout=window)
-        return cache.incr(key)
+        count = cache.incr(key)
+    if count == 1:
+        # Redis `incr` is not atomic in Django: a key expiring inside it is recreated
+        # without expiry, which would never reset the counter
+        cache.touch(key, window)
+    return count
 
 
 def _too_many_requests_error() -> ValidationError:

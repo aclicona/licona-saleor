@@ -1145,19 +1145,39 @@ RESET_PASSWORD_LOCK_TIME = parse(
     os.environ.get("RESET_PASSWORD_LOCK_TIME", "15 minutes")
 )
 
+
 # B-2607: caps on `accountRegister` and `requestPasswordReset`, counted in fixed
 # windows. A limit of 0 disables that cap.
-ACCOUNT_EMAIL_THROTTLE_WINDOW = parse(
-    os.environ.get("ACCOUNT_EMAIL_THROTTLE_WINDOW", "10 minutes")
+def get_throttle_window_from_env(name: str, default_value: str) -> int:
+    value = os.environ.get(name, default_value)
+    seconds = parse(value)
+    if not isinstance(seconds, int) or seconds <= 0:
+        raise ImproperlyConfigured(f"{name} must be a positive number of seconds.")
+    return seconds
+
+
+def get_throttle_limit_from_env(name: str, default_value: int) -> int:
+    limit = int(os.environ.get(name, default_value))
+    if limit < 0:
+        raise ImproperlyConfigured(f"{name} cannot be negative.")
+    return limit
+
+
+ACCOUNT_EMAIL_THROTTLE_WINDOW = get_throttle_window_from_env(
+    "ACCOUNT_EMAIL_THROTTLE_WINDOW", "10 minutes"
 )
-ACCOUNT_REGISTER_NETWORK_LIMIT = int(
-    os.environ.get("ACCOUNT_REGISTER_NETWORK_LIMIT", 10)
+ACCOUNT_REGISTER_NETWORK_LIMIT = get_throttle_limit_from_env(
+    "ACCOUNT_REGISTER_NETWORK_LIMIT", 10
 )
-ACCOUNT_REGISTER_GLOBAL_LIMIT = int(
-    os.environ.get("ACCOUNT_REGISTER_GLOBAL_LIMIT", 200)
+ACCOUNT_REGISTER_GLOBAL_LIMIT = get_throttle_limit_from_env(
+    "ACCOUNT_REGISTER_GLOBAL_LIMIT", 200
 )
-PASSWORD_RESET_NETWORK_LIMIT = int(os.environ.get("PASSWORD_RESET_NETWORK_LIMIT", 15))
-PASSWORD_RESET_GLOBAL_LIMIT = int(os.environ.get("PASSWORD_RESET_GLOBAL_LIMIT", 200))
+PASSWORD_RESET_NETWORK_LIMIT = get_throttle_limit_from_env(
+    "PASSWORD_RESET_NETWORK_LIMIT", 15
+)
+PASSWORD_RESET_GLOBAL_LIMIT = get_throttle_limit_from_env(
+    "PASSWORD_RESET_GLOBAL_LIMIT", 200
+)
 
 # Lock time for request confirmation email mutation per user
 CONFIRMATION_EMAIL_LOCK_TIME = parse(
