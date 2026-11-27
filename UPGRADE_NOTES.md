@@ -8,6 +8,24 @@ Antes de cada actualización de upstream, revisar esta lista para detectar confl
 
 ---
 
+## B-2587 — el freno de login cuenta por red: /64 en IPv6 (2026-11-26)
+
+**Cambio divergente de upstream** en `saleor/account/throttling.py`. Upstream usa la dirección completa del cliente en
+las claves `login:fail:ip:*`, `login:block:ip:*` y `login:fail:ip:*:user:*`; un cliente IPv6 dispone de al menos un /64,
+así que con cada dirección estrena bloqueo y contadores, y dos grafías de la misma IPv6 cuentan aparte.
+
+- **Arreglo:** `get_throttling_network` (llamado en `authenticate_with_throttling` tras validar que hay IP) convierte la
+  IP en clave de red: IPv4 sin cambios; IPv4 mapeada (`::ffff:a.b.c.d`) → IPv4; IPv6 → red /64 canónica, sin zona;
+  valor no parseable → tal cual (el freno sigue aplicando). `get_client_ip` **no** cambia: los pagos necesitan la IP
+  completa.
+- **Efecto colateral aceptado:** los usuarios de un mismo /64 comparten bloqueo y contadores (y un login correcto de
+  cualquiera de ellos limpia el bloqueo y el contador de la red, como ya ocurría entre usuarios tras una misma IPv4).
+  Al desplegar, los contadores IPv6 con la clave antigua quedan sin uso y caducan solos (máximo 2 h).
+- **Tests:** `saleor/account/tests/test_throttling_network.py`.
+- **Al sincronizar upstream:** conservar `get_throttling_network` y su llamada aunque upstream reescriba el freno.
+
+---
+
 ## B-2471 — `get_client_ip` toma la IP de confianza desde la derecha del X-Forwarded-For (2026-11-24)
 
 **Cambio divergente de upstream** en `saleor/core/utils/__init__.py::get_client_ip`. Upstream devuelve la primera IP

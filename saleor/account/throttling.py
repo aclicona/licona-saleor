@@ -1,4 +1,5 @@
 import datetime
+import ipaddress
 import logging
 from math import ceil
 
@@ -14,6 +15,8 @@ from .utils import retrieve_user_by_email
 MIN_DELAY = 1
 MAX_DELAY = 3600
 ATTEMPT_COUNTER_EXPIRE_TIME = 7200
+# Prefix usually delegated to a single IPv6 client (B-2587).
+IPV6_THROTTLE_PREFIX = 64
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,7 @@ def authenticate_with_throttling(request, email, password) -> models.User | None
             "Can't identify requester IP address.",
             code=AccountErrorCode.UNKNOWN_IP_ADDRESS.value,
         )
+    ip = get_throttling_network(ip)
 
     ip_key = get_cache_key_failed_ip(ip)
     block_key = get_cache_key_blocked_ip(ip)
@@ -73,6 +77,27 @@ def authenticate_with_throttling(request, email, password) -> models.User | None
     override_block(block_key, delay)
 
     return None
+
+
+def get_throttling_network(ip: str) -> str:
+    """Return the network the login throttling is counted against.
+
+    Divergence from upstream (B-2587, see UPGRADE_NOTES.md): an IPv6 client owns at
+    least a whole /64, so counting by address lets it start afresh at will. IPv6 is
+    reduced to its canonical /64 (zone id dropped), IPv4-mapped IPv6 to its IPv4, and
+    IPv4 stays as is. An unparsable value is returned untouched, so it stays throttled.
+    """
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if isinstance(address, ipaddress.IPv4Address):
+        return ip
+    if address.ipv4_mapped:
+        return str(address.ipv4_mapped)
+    # `int()` drops the zone id; IPv6Network keeps small integers (`::1`) as IPv6.
+    network = ipaddress.IPv6Network((int(address), IPV6_THROTTLE_PREFIX), strict=False)
+    return str(network)
 
 
 def get_cache_key_failed_ip(ip: str) -> str:
